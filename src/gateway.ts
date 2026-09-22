@@ -537,7 +537,13 @@ export class Gateway {
       if (!inspected.replyConfirmed && this.options.recoverReply) {
         const request = this.store.inbox.replyRecoveryRequest(inspected, resultToReply(observation.result));
         if (request && matches()) {
-          const proof = await this.options.recoverReply(inspected.message, request, AbortSignal.timeout(20_000));
+          let proof: ReplyObservation;
+          try { proof = await this.options.recoverReply(inspected.message, request, AbortSignal.timeout(20_000)); }
+          catch (error) {
+            console.warn("回复补发核查未完成，保留原任务：", failureDiagnostic(error));
+            await this.reportGatewayFailure(inspected.message, "回复补发核查", error, inspected.sessionId);
+            proof = { status: "unknown", reason: "unavailable" };
+          }
           if (!matches()) return;
           if (proof.status === "confirmed") inspected = this.store.inbox.confirmRecoveredReply(inspected, request, proof);
         }

@@ -51,12 +51,20 @@ export function failureDiagnostic(error: unknown): FailureDiagnostic {
 }
 
 // 只解析已观测的结构化错误；原始message、URL与嵌套响应不进入回复/审计。
+// error.type 仅在命中方舟文档列出的固定枚举时才作为 code 保留；未知取值可能是伪造/异常数据，一律归为 unknown 且不留痕。
+const sessionErrorKinds: Record<string, FailureKind> = {
+  model_rate_limited_error: "rate_limit",
+  model_overloaded_error: "upstream",
+  model_request_failed_error: "upstream",
+  billing_error: "permission",
+  unknown_error: "unknown",
+};
 export function sessionFailure(event: Record<string, unknown>): FailureDiagnostic {
   const error = event.error && typeof event.error === "object" ? event.error as Record<string, unknown> : {};
-  if (error.type === "model_rate_limited_error") return { kind: "rate_limit", code: "model_rate_limited_error" };
-  if (error.type !== "model_request_failed_error") return { kind: "unknown" };
-  const fallback: FailureDiagnostic = { kind: "upstream", code: "model_request_failed_error" };
-  if (typeof error.message !== "string" || error.message.length > 32768) return fallback;
+  const type = typeof error.type === "string" && Object.hasOwn(sessionErrorKinds, error.type) ? error.type : undefined;
+  if (!type) return { kind: "unknown" };
+  const fallback: FailureDiagnostic = { kind: sessionErrorKinds[type], code: type };
+  if (type !== "model_request_failed_error" || typeof error.message !== "string" || error.message.length > 32768) return fallback;
   try {
     const inner = JSON.parse(error.message)?.error;
     if (inner?.code !== "InvalidParameter" || inner?.param !== "file_url" || typeof inner.message !== "string"
@@ -72,6 +80,8 @@ export class ArkRunError extends Error {
     const safe = sanitizeFailure(failure);
     const reason = safe.code === "model_file_processing_timeout" ? "模型侧文件内容处理超时（file_url），本轮未完成；网关不会自动重跑任务。"
       : safe.kind === "rate_limit" ? "模型请求被限流，本轮未完成；网关不会自动重跑任务。"
+      : safe.code === "model_overloaded_error" ? "模型侧繁忙（过载），本轮未完成；网关不会自动重跑任务。"
+      : safe.code === "billing_error" ? "账号计费或额度异常，本轮未完成；请检查方舟账户余额或权限。"
       : "Agent Session 执行失败，请检查 MA 运行记录；网关不会自动重跑任务。";
     super(`${reason}${safe.requestId ? ` Request ID: ${safe.requestId}` : ""}`);
     this.name = "ArkRunError"; this.failure = safe;

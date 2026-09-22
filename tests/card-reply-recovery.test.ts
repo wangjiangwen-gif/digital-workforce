@@ -127,10 +127,11 @@ async function until(check: () => boolean) {
   for (let i = 0; i < 200 && !check(); i++) await flush();
   assert.ok(check());
 }
-for (const recovered of [true, false])
-  test(`中断的部分卡片恢复${recovered ? '成功放行' : '失败保留'}队列且不重跑原任务`, async () => {
+for (const recovered of [true, false, 'throws'])
+  test(`中断的部分卡片恢复${recovered === true ? '成功放行' : recovered === 'throws' ? '异常保留并发送诊断' : '失败保留'}队列且不重跑原任务`, async () => {
     const store = new GatewayStore(':memory:');
     store.acquireRuntimeLock();
+    const replies: string[] = [];
     let runs = 0,
       recoveries = 0;
     const result = { terminal: 'idle' as const, messages: ['final'] };
@@ -144,9 +145,10 @@ for (const recovered of [true, false])
         },
         inspectRun: async () => ({ status: 'ended', anchorEventId: 'a', terminalEventId: 'b', result }),
       },
-      async () => {},
+      async (_m, out) => { if (out.type === 'text') replies.push(out.text); },
       {
         ...opts,
+        reportDiagnostics: recovered === 'throws',
         streamReply: async (m, produce, observe) => {
           await produce(async () => {});
           await observe?.({ type: 'begin', mode: 'native_card' });
@@ -164,7 +166,8 @@ for (const recovered of [true, false])
           recoveries++;
           assert.equal(request.content, 'final');
           assert.equal(request.cardId, 'card');
-          return recovered
+          if (recovered === 'throws') throw new Error('补发连接失败');
+          return recovered === true
             ? {
                 status: 'confirmed',
                 messageId: request.messageId,
@@ -178,13 +181,14 @@ for (const recovered of [true, false])
     );
     try {
       gateway.accept(incoming);
-      await until(() => store.inbox.findMessage(incoming)?.state === (recovered ? 'completed' : 'uncertain'));
+      await until(() => store.inbox.findMessage(incoming)?.state === (recovered === true ? 'completed' : 'uncertain'));
       await flush();
       await gateway.reconcilePendingMessage(incoming);
-      assert.equal(store.inbox.findMessage(incoming)?.state, recovered ? 'completed' : 'uncertain');
+      assert.equal(store.inbox.findMessage(incoming)?.state, recovered === true ? 'completed' : 'uncertain');
       assert.equal(runs, 1);
       assert.ok(recoveries >= 1);
-      if (recovered) {
+      if (recovered === 'throws') assert.ok(replies.some(text => text.includes('回复补发核查')));
+      if (recovered === true) {
         await gateway.reconcilePendingMessage(incoming);
         assert.equal(runs, 1);
         const next = { ...incoming, messageId: 'second', eventId: 'second', text: 'second' };

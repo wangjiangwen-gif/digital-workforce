@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { inspect } from "node:util";
 import { ArkClient, ArkHttpError } from "../src/ark.ts";
-import { failureDiagnostic } from "../src/ark-errors.ts";
+import { failureDiagnostic, sessionFailure, ArkRunError } from "../src/ark-errors.ts";
 
 async function failure(action: Promise<unknown>): Promise<any> {
   try { await action; } catch (error) { return error; }
@@ -110,3 +110,19 @@ test("invalid UTF-8 error streams are cancelled and never retain a partial struc
   const error = await failure(client.getAgent("a"));
   assert.equal(error.status, 400); assert.equal(error.code, undefined); assert.equal(cancelled, true);
 });
+
+for (const [type, kind, hint] of [
+  ["model_overloaded_error", "upstream", "过载"],
+  ["billing_error", "permission", "计费"],
+  ["unknown_error", "unknown", "执行失败"],
+] as const) test(`Session ${type} 保留固定分类且不回显原始正文`, () => {
+  const diagnostic = sessionFailure({ error: { type, message: "PRIVATE-KEY https://example.test/?token=SECRET" } });
+  assert.deepEqual(diagnostic, { kind, code: type });
+  const error = new ArkRunError(diagnostic);
+  assert.match(error.message, new RegExp(hint));
+  assert.doesNotMatch(inspect(error), /PRIVATE-KEY|SECRET|example.test/);
+});
+for (const type of ["PRIVATE-KEY", "constructor", "__proto__", "toString", null, {}])
+  test(`Session 未知类型 ${JSON.stringify(type)} 不进入诊断 code`, () => {
+    assert.deepEqual(sessionFailure({ error: { type, message: "SECRET" } }), { kind: "unknown" });
+  });
