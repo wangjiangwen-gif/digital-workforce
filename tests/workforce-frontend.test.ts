@@ -109,3 +109,38 @@ test('旧浏览器数据补充演示任务且已保存任务不被重新初始�
   repository.save(migrated);
   assert.equal(repository.load().tasks.length, 0);
 });
+
+test('空白服务首次连接使用服务端状态，不导入浏览器演示群聊', async () => {
+  const state = { employees: [], projects: [], groups: [], tasks: [] };
+  const calls: any[] = [];
+  let accepted: any;
+  const connect = runInNewContext(
+    source.slice(source.indexOf('async function connectWorkspace()'), source.indexOf("let search = ''")) +
+      '\nconnectWorkspace;',
+    {
+      $: () => ({}),
+      request: async (_path: string, method?: string, payload?: any) => {
+        calls.push({ method, payload });
+        return { initialized: method === 'PUT', revision: method === 'PUT' ? 1 : 0, state };
+      },
+      repository: {
+        load: () => {
+          throw new Error('不应读取浏览器演示数据');
+        },
+      },
+      migrateMemories: structuredClone,
+      acceptServer: (result: any) => {
+        accepted = result;
+      },
+      refreshMaStatus: async () => {},
+      render: () => {},
+      paintMaStatus: () => {},
+      empty: () => '',
+      esc: String,
+      button: () => '',
+    },
+  );
+  await connect();
+  assert.equal(accepted?.initialized, true);
+  assert.equal(JSON.stringify(calls[1].payload.state), JSON.stringify(state));
+});

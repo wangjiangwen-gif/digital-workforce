@@ -1,4 +1,4 @@
-// 浏览器旧数据仅用于首次导入；连接后以本机 SQLite 工作台为准。
+// 工作台以服务端状态为准，不自动导入浏览器旧数据或演示数据。
 const storageKey = 'workforce.frontend.v1';
 const copy = (value) => structuredClone(value);
 const uid = () => crypto.randomUUID();
@@ -279,7 +279,7 @@ async function connectWorkspace() {
   try {
     let result = await request('');
     if (!result.initialized) {
-      const initial = migrateMemories(repository.load());
+      const initial = migrateMemories(result.state);
       initial.tasks = [];
       try {
         result = await request('', 'PUT', { revision: 0, state: initial });
