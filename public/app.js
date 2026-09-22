@@ -616,7 +616,7 @@ async function openMaConfig() {
       <form id="ma-config-form" autocomplete="off"><label for="ma-api-key">方舟 API Key</label>
       <input id="ma-api-key" type="password" name="apiKey" autocomplete="new-password" maxlength="4096" required placeholder="${state.configured ? '输入新密钥以替换；留空不修改' : '输入具备 MA 权限的 API Key'}" />
       <p id="ma-verification-message" class="muted" role="status">${esc(state.message)}</p>
-      <p class="muted">初始化会核验并补齐已有 ADA / 社媒热点员工的配套技能、环境、记忆库、Agent 与 Bot 凭证。已存在的资源会复用；已删除且无备份的记忆只能重建空库。初始化会暂停飞书 Channel，完成后需重启本机服务并发送 /new。</p><div id="ma-initialization-status" role="status"></div>
+      <p class="muted">初始化会核验并补齐已有 ADA / 社媒热点员工的配套技能、环境、记忆库、Agent 与 Bot 凭证。已存在的资源会复用；已删除且无备份的记忆只能重建空库。初始化会暂停飞书 Channel，成功后自动恢复连接，无需重启服务；请发送 /new 使用新资源。若初始化失败，修复后重试完成初始化以恢复连接。</p><div id="ma-initialization-status" role="status"></div>
       <div class="actions form-actions">${button('取消', 'close')}${state.configured ? button('重新验证已保存密钥', 'verify-ma') + button('一键初始化 MA 资源', 'initialize-ma') : ''}<button class="primary" type="submit">保存并验证</button></div></form>`,
     );
   } catch (error) {

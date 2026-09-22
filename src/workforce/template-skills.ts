@@ -16,9 +16,13 @@ async function uploadSkill(name: string, key: string) {
   const directory = mkdtempSync(join(tmpdir(), 'workforce-skill-'));
   try {
     const zip = join(directory, `${name}.zip`);
-    execFileSync('zip', ['-q', '-r', zip, name, '-x', '*/__pycache__/*', '*/test_*.py'], {
-      cwd: resolve('skills'),
-    });
+    try {
+      execFileSync('zip', ['-q', '-r', zip, name, '-x', '*/__pycache__/*', '*/test_*.py'], {
+        cwd: resolve('skills'),
+      });
+    } catch {
+      throw new DomainError('技能尚未上传：打包失败，请检查服务端 zip 命令和技能目录后重试', 400);
+    }
     const body = new FormData();
     body.set('files', new Blob([readFileSync(zip)], { type: 'application/zip' }), `${name}.zip`);
     const response = await fetch('https://ark.cn-beijing.volces.com/api/v3/skills', {
@@ -73,6 +77,27 @@ export async function ensureTemplateSkills(
       '/skills',
       spec.revision ? undefined : known,
       () => uploadSkill(spec.name, guard()),
+      spec.revision
+        ? undefined
+        : async () => {
+            const matches = (await api.all('/skills')).filter(
+              (s: any) => s.name === spec.name && s.source === 'custom',
+            );
+            if (matches.length > 1)
+              throw new DomainError(`技能 ${spec.name} 有多个同名资源，无法自动确认，请核查 MA`, 409);
+            if (!matches.length) return undefined;
+            const raw = await api.call(`/skills/${encodeURIComponent(matches[0].id)}`);
+            const found = raw.data || raw;
+            if (
+              found.id !== matches[0].id ||
+              found.name !== spec.name ||
+              found.source !== 'custom' ||
+              !/^\d+$/.test(String(found.latest_version))
+            )
+              throw new DomainError(`技能 ${spec.name} 的恢复核验未通过`, 502);
+            guard();
+            return found;
+          },
     );
     // 先持久化创建回执，再回读；回读失败不丢 ID、不重复上传。
     const raw = result.created

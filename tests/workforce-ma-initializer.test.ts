@@ -103,6 +103,9 @@ for (const includeSocial of [false, true])
     };
     const channels: any = {
       pauseForInitialization: async () => {},
+      resumeAfterInitialization: () => {
+        calls.push('resume');
+      },
       resourceBindings: () => (binding ? [binding] : []),
       saveResourceBinding: (b: any) => {
         binding = structuredClone(b);
@@ -112,6 +115,7 @@ for (const includeSocial of [false, true])
       const path = new URL(url).pathname.replace('/api/v3', ''),
         method = options.method || 'GET';
       calls.push(`${method} ${path}`);
+      if (path === '/skills' && method === 'GET') return Response.json({ data: [] });
       if (path === '/environments' && method === 'GET') return Response.json({ data: [] });
       const index = PLATFORM_SKILLS.findIndex((s) => path === `/skills/${s.id}`);
       if (index >= 0)
@@ -164,6 +168,7 @@ for (const includeSocial of [false, true])
         );
       assert.equal(state.employees[0].skills.length, 3);
       assert.equal(binding.agentId, 'agent-new');
+      assert.equal(calls.at(-1), 'resume');
     } finally {
       db.close();
     }
@@ -201,6 +206,122 @@ test('初始化 HTTP 入口拒绝跨站调用，初始化中禁止切换 Key，�
   } finally {
     await new Promise<void>((r) => server.close(() => r()));
     domain.close();
+    workspace.close();
+  }
+});
+
+test('未知创建结果仅在远端核验成功后恢复，不重复上传', async () => {
+  const db = new DatabaseSync(':memory:');
+  const registry = new MaResourceRegistry({ db } as any, 'key', { call: async () => ({}) });
+  let posts = 0;
+  const create = async () => {
+    posts++;
+    throw new Error('timeout');
+  };
+  try {
+    await assert.rejects(registry.ensure('skill:test', '/skills', undefined, create));
+    await assert.rejects(
+      registry.ensure('skill:test', '/skills', undefined, create, async () => undefined),
+      /未确认/,
+    );
+    const restored = await registry.ensure('skill:test', '/skills', undefined, create, async () => ({
+      id: 'skill-existing',
+    }));
+    assert.equal(restored.resource.id, 'skill-existing');
+    assert.equal(posts, 1);
+    assert.equal(
+      JSON.parse(String(db.prepare('SELECT payload FROM workspace_ma_resources').get()!.payload)).pending,
+      undefined,
+    );
+  } finally {
+    db.close();
+  }
+});
+
+test('确定的上传前失败允许重试，不留下未知创建状态', async () => {
+  const db = new DatabaseSync(':memory:');
+  const registry = new MaResourceRegistry({ db } as any, 'key', { call: async () => ({}) });
+  try {
+    await assert.rejects(
+      registry.ensure('skill:test', '/skills', undefined, async () => {
+        throw new DomainError('打包失败', 400);
+      }),
+    );
+    assert.equal(
+      (await registry.ensure('skill:test', '/skills', undefined, async () => ({ id: 'skill-new' }))).created,
+      true,
+    );
+  } finally {
+    db.close();
+  }
+});
+
+import { ensureTemplateSkills } from '../src/workforce/template-skills.ts';
+import { createHash } from 'node:crypto';
+for (const matches of [0, 1, 2])
+  test(`技能恢复核验同名候选数量 ${matches}，不发送创建请求`, async (t) => {
+    const workspace = new LocalWorkspace(':memory:');
+    const key = 'recovery-test';
+    new MaResourceRegistry(workspace, createHash('sha256').update(key).digest('hex'), {
+      call: async () => ({}),
+    });
+    workspace.db
+      .prepare('INSERT INTO workspace_ma_resources VALUES(?,?,?)')
+      .run(
+        createHash('sha256').update(key).digest('hex'),
+        'skill:social-trend-data',
+        JSON.stringify({ pending: true }),
+      );
+    const skill = { id: 'skill-existing', name: 'social-trend-data', source: 'custom', latest_version: '2' };
+    let catalog: any[] = [];
+    t.mock.method(globalThis, 'fetch', async (url: any, options: any) => {
+      assert.equal(options.method, 'GET');
+      return Response.json(
+        new URL(url).pathname.endsWith('/skills')
+          ? { data: Array.from({ length: matches }, () => skill) }
+          : skill,
+      );
+    });
+    try {
+      const run = ensureTemplateSkills(
+        workspace,
+        {
+          apiKey: () => key,
+          platformSkills: () => catalog,
+          savePlatformSkills: (s: any) => {
+            catalog = s;
+          },
+        } as any,
+        [{ name: skill.name, tags: ['social'] }],
+      );
+      if (matches === 1) assert.equal((await run)[0].id, skill.id);
+      else await assert.rejects(run, matches ? /多个同名/ : /未确认/);
+    } finally {
+      workspace.close();
+    }
+  });
+
+test('缺失 zip 时尚未上传且不残留 pending', async (t) => {
+  const workspace = new LocalWorkspace(':memory:');
+  const original = process.env.PATH;
+  let requests = 0;
+  t.mock.method(globalThis, 'fetch', async () => {
+    requests++;
+    return Response.json({ data: [] });
+  });
+  try {
+    process.env.PATH = '/nonexistent-workforce-test';
+    await assert.rejects(
+      ensureTemplateSkills(workspace, { apiKey: () => 'test', platformSkills: () => [] } as any, [
+        { name: 'social-trend-data', tags: [] },
+      ]),
+      /打包失败/,
+    );
+    assert.equal(requests, 1);
+    assert.equal(workspace.db.prepare('SELECT COUNT(*) AS n FROM workspace_ma_resources').get()!.n, 0);
+  } finally {
+    if (original === undefined) delete process.env.PATH;
+    else process.env.PATH = original;
     workspace.close();
   }
 });

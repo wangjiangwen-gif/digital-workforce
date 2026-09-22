@@ -361,3 +361,38 @@ test('已有应用并发接入和重复绑定均被拦截', async () => {
     w.close();
   }
 });
+
+test('初始化暂停后可自动恢复，服务关闭后不再恢复', async () => {
+  const w = workspace();
+  let starts = 0,
+    stops = 0;
+  const channels = new WorkspaceChannels(w, {
+    dataDir: '/tmp',
+    register: async () => ({ client_id: 'cli_pause_test', client_secret: 'secret' }),
+    provision: async () => {},
+    connect: async () => {
+      starts++;
+      return async () => {
+        stops++;
+      };
+    },
+  });
+  try {
+    channels.begin('e');
+    await until(() => channels.view('e').status === 'connected');
+    await until(() => !(channels as any).active.size);
+    await channels.pauseForInitialization();
+    assert.equal(stops, 1);
+    assert.throws(() => channels.begin('e'), /初始化/);
+    channels.resumeAfterInitialization();
+    await until(() => starts === 2);
+    await until(() => !(channels as any).active.size);
+    await channels.pauseForInitialization();
+    await channels.stop();
+    channels.resumeAfterInitialization();
+    assert.equal(starts, 2);
+  } finally {
+    await channels.stop();
+    w.close();
+  }
+});

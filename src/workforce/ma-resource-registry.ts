@@ -15,7 +15,13 @@ export class MaResourceRegistry {
   private workspace: LocalWorkspace;
   private scope: string;
   private api: Pick<MaMemoryApi, 'call'>;
-  async ensure(name: string, path: string, known: string | undefined, create: () => Promise<any>) {
+  async ensure(
+    name: string,
+    path: string,
+    known: string | undefined,
+    create: () => Promise<any>,
+    recover?: () => Promise<any>,
+  ) {
     const row = this.workspace.db
       .prepare('SELECT payload FROM workspace_ma_resources WHERE scope=? AND name=?')
       .get(this.scope, name);
@@ -24,6 +30,13 @@ export class MaResourceRegistry {
       this.workspace.db
         .prepare('INSERT OR REPLACE INTO workspace_ma_resources VALUES(?,?,?)')
         .run(this.scope, name, JSON.stringify(value));
+    if (saved?.pending && recover) {
+      const found = await recover();
+      if (found?.id) {
+        save({ id: found.id });
+        return { resource: found, created: false };
+      }
+    }
     if (saved?.pending) throw new DomainError(`${name} 上次创建结果未确认，请核查 MA，未重复创建`, 409);
     const id = saved?.id || known;
     if (id) {
@@ -35,6 +48,13 @@ export class MaResourceRegistry {
         return { resource: found, created: false };
       } catch (error) {
         if (!(error instanceof DomainError && error.status === 404)) throw error;
+      }
+    }
+    if (recover) {
+      const found = await recover();
+      if (found?.id) {
+        save({ id: found.id });
+        return { resource: found, created: false };
       }
     }
     save({ pending: true });

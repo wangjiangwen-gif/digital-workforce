@@ -80,6 +80,7 @@ export class WorkspaceChannels {
   private running = new Map<string, () => Promise<void>>();
   private jobs = new Set<Promise<void>>();
   private closed = false;
+  private initializationPaused = false;
   constructor(workspace: LocalWorkspace, options: Options) {
     this.workspace = workspace;
     this.options = options;
@@ -115,7 +116,7 @@ export class WorkspaceChannels {
     this.employee(id);
     const b = this.get(id);
     if (!b?.appId) throw new DomainError('请先创建并绑定飞书应用');
-    if (this.closed) throw new DomainError('服务正在关闭', 503);
+    if (this.closed || this.initializationPaused) throw new DomainError('服务正在关闭或初始化', 503);
     if (this.active.has(id)) return this.view(id);
     if (this.running.has(id)) throw new DomainError('请先重启本机服务，再补齐权限', 409);
     const controller = new AbortController();
@@ -229,7 +230,8 @@ export class WorkspaceChannels {
   private async performSync(id: string) {
     const employee = this.employee(id);
     const binding = this.get(id);
-    if (this.closed || this.active.has(id)) throw new DomainError('员工接入进行中，请稍后同步', 409);
+    if (this.closed || this.initializationPaused || this.active.has(id))
+      throw new DomainError('员工接入进行中，请稍后同步', 409);
     if (!binding?.agentId) throw new DomainError('请先完成飞书接入并创建 MA Agent', 409);
     if (binding.pendingResource) throw new DomainError('上次 MA 操作结果未确认，请先核查后继续', 409);
     const hash = employeeConfigurationHash(employee);
@@ -260,7 +262,7 @@ export class WorkspaceChannels {
   }
   async bindExisting(id: string, input: { appId?: unknown; appSecret?: unknown }) {
     this.employee(id);
-    if (this.closed) throw new DomainError('服务正在关闭', 503);
+    if (this.closed || this.initializationPaused) throw new DomainError('服务正在关闭或初始化', 503);
     const appId = typeof input.appId === 'string' ? input.appId.trim() : '';
     const appSecret = typeof input.appSecret === 'string' ? input.appSecret.trim() : '';
     if (
@@ -317,7 +319,7 @@ export class WorkspaceChannels {
 
   begin(id: string, confirmedNotCreated = false) {
     const employee = this.employee(id);
-    if (this.closed) throw new DomainError('服务正在关闭', 503);
+    if (this.closed || this.initializationPaused) throw new DomainError('服务正在关闭或初始化', 503);
     if (this.active.has(id) || this.running.has(id)) return this.view(id);
     let b = this.get(id);
     if (b?.pendingResource)
@@ -676,6 +678,7 @@ export class WorkspaceChannels {
     this.put(binding);
   }
   async pauseForInitialization() {
+    if (this.closed) throw new DomainError('服务正在关闭', 503);
     if (this.active.size || this.synchronizing.size)
       throw new DomainError('员工接入或同步进行中，请稍后初始化', 409);
     for (const binding of this.all()) {
@@ -698,7 +701,15 @@ export class WorkspaceChannels {
         db.close();
       }
     }
-    await this.stop();
+    this.initializationPaused = true;
+    const stops = [...this.running.values()];
+    await Promise.all(stops.map((stop) => stop()));
+    this.running.clear();
+  }
+  resumeAfterInitialization() {
+    if (this.closed || !this.initializationPaused) return;
+    this.initializationPaused = false;
+    this.resume();
   }
   resume() {
     for (const b of this.all())

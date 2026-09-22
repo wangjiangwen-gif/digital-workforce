@@ -154,7 +154,7 @@ export class MaInitializer {
       ark = new ArkClient(key, 'https://ark.cn-beijing.volces.com/api/v3');
     const availableEnvironments = await api.all('/environments');
     await this.channels.pauseForInitialization();
-    job.warnings.push('初始化后请重启本机服务，并在飞书发送 /new 使用新资源。');
+    job.warnings.push('初始化完成后自动恢复飞书连接，请在飞书发送 /new 使用新资源。');
     const registry = new MaResourceRegistry(
       this.workspace,
       createHash('sha256').update(key).digest('hex'),
@@ -305,7 +305,7 @@ export class MaInitializer {
         binding.credentialId = credential.resource.id;
       }
       binding.status = 'stopped';
-      binding.message = 'MA 资源初始化完成，请重启服务';
+      binding.message = 'MA 资源初始化完成，准备恢复连接';
       binding.runtimeVersion = 2;
       this.channels.saveResourceBinding(binding);
       note(`已初始化数字员工：${employee.name}`);
@@ -314,8 +314,9 @@ export class MaInitializer {
       await this.channels.organizer.initializeResource();
       note('已核验记忆整理 Agent');
     }
+    this.channels.resumeAfterInitialization();
     job.status = 'completed';
-    job.progress = 'MA 配套资源初始化完成';
+    job.progress = 'MA 配套资源初始化完成，已发起飞书重连';
     job.result = [...job.steps, ...job.warnings].join('\n');
   }
 }

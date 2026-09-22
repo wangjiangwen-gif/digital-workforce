@@ -77,6 +77,7 @@ test('社媒与 ADA 技能真实上传和回读后绑定，目录合并且重试
       remote.set(id, { id, name, source: 'custom', latest_version: '1' });
       return Response.json({ id });
     }
+    if (path === '/api/v3/skills') return Response.json({ data: [...remote.values()] });
     const skill = remote.get(path.split('/').at(-1)!);
     return skill ? Response.json(skill) : Response.json({}, { status: 404 });
   });
@@ -117,6 +118,7 @@ test('部分上传失败保留已成功的目录，未知结果重试不再创�
       if (uploads === 2) throw Error('network timeout');
       return Response.json({ id: 'skill-first' });
     }
+    if (new URL(url).pathname === '/api/v3/skills') return Response.json({ data: [] });
     return Response.json({
       id: 'skill-first',
       name: SOCIAL_SKILL_NAMES[0],
