@@ -168,6 +168,7 @@ export class Gateway {
     if (!shouldHandleMessage(message)) return false;
     const control = (message.text.trim() === "/auth status" && this.options.authorizationStatus)
       || (message.conversationType === "direct" && message.text.trim() === "/auth cancel" && this.options.cancelAuthorization);
+    if (message.text.trim() === "/new") return this.acceptReset(message);
     if (this.options.sharedGroupSessions && message.conversationType === "group") {
       try { this.conversationKey(message); }
       catch (error) {
@@ -176,7 +177,6 @@ export class Gateway {
         return false;
       }
     }
-    if (message.text.trim() === "/new") return this.acceptReset(message);
     if (this.options.durableQueue && !control) {
       const task = this.store.receiveMessage(message, this.inboxBinding(message));
       if (!task) return false;
@@ -251,27 +251,42 @@ export class Gateway {
   private async resetConversation(message: IncomingMessage): Promise<void> {
     if (!this.options.platformAccess && message.senderId !== this.options.authorizedUserId)
       throw new Error("当前用户未授权");
-    const key = this.conversationKey(message), scope = this.store.conversationKey(key);
-    if (this.resetScopes.has(scope)) throw new Error("此会话正在恢复，请等待本次结果");
-    if (this.queue.isRunning(scope)) throw new Error("本机仍有任务执行中，/new 未排队，请待任务结束后重试");
+    let key: ConversationKey, branches: ConversationKey[] | undefined;
+    const canonical = toConversationKey(message, Boolean(this.options.sharedGroupSessions));
+    if (this.resetScopes.has(this.store.conversationKey(canonical))) throw new Error("此会话正在恢复，请等待本次结果");
+    try { key = this.conversationKey(message); }
+    catch (error) {
+      if (!this.options.sharedGroupSessions || message.conversationType !== "group") throw error;
+      branches = this.store.sharedGroupBranches(canonical);
+      if (branches.length < 2) throw error;
+      key = canonical;
+    }
+    const scope = this.store.conversationKey(key);
+    const scopes = [...new Set([scope, ...(branches || []).map(branch => this.store.conversationKey(branch))])];
+    if (scopes.some(value => this.resetScopes.has(value))) throw new Error("此会话正在恢复，请等待本次结果");
+    if (scopes.some(value => this.queue.isRunning(value))) throw new Error("本机仍有任务执行中，/new 未排队，请待任务结束后重试");
     if (this.usesIsolatedSession(message)) {
       await this.replyText(message, "当前模式每条消息都会创建独立 Agent Session，无需手动开启新会话。");
       this.store.completeEvent(message.channelType, message.installationId, message.messageId, "completed");
       return;
     }
-    this.resetScopes.add(scope);
-    this.queue.pause(scope);
-    const epoch = (this.queueEpochs.get(scope) || 0) + 1;
-    this.queueEpochs.set(scope, epoch);
+    const epochs = new Map<string, number>();
+    for (const value of scopes) {
+      this.resetScopes.add(value);
+      this.queue.pause(value);
+      const epoch = (this.queueEpochs.get(value) || 0) + 1;
+      this.queueEpochs.set(value, epoch);
+      epochs.set(value, epoch);
+    }
     let succeeded = false;
     try {
-      if (this.store.sessionCreations.pending(scope)) throw new Error("此前 Session 创建结果待核实，不能跳过未决创建");
+      if (scopes.some(value => this.store.sessionCreations.pending(value))) throw new Error("此前 Session 创建结果待核实，不能跳过未决创建");
       const tasks: InboxTask[] = [];
       if (this.options.durableQueue) {
         let after = 0;
         do {
           const page = this.store.inbox.listPending(message.channelType, message.installationId, this.options.agentId, after);
-          tasks.push(...page.tasks.filter(task => task.binding.scope === scope));
+          tasks.push(...page.tasks.filter(task => scopes.includes(task.binding.scope)));
           if (!page.next) break;
           after = page.next;
         } while (true);
@@ -300,21 +315,43 @@ export class Gateway {
             finally { clearTimeout(timer); controller.abort(); }
           }
         }
-        this.store.resetConversationQueue(key, tasks, message);
+        if (branches) {
+          for (const branch of branches) {
+            const sessionId = this.store.getSession(branch);
+            if (!sessionId) continue;
+            if (!this.ark.inspectSessionReadiness) throw new Error("无法核查旧分支 Session 状态，请先由管理员核查");
+            const controller = new AbortController();
+            let timer: ReturnType<typeof setTimeout> | undefined;
+            try {
+              const ready = await Promise.race([this.ark.inspectSessionReadiness(sessionId, controller.signal),
+                new Promise<never>((_resolve, reject) => { timer = setTimeout(() => { controller.abort(); reject(new Error("核查超时")); }, 10_000); })]);
+              if (ready.sessionId !== sessionId || ready.agentId !== this.options.agentId || !["idle", "failed"].includes(ready.status))
+                throw new Error("旧 Session 未结束或身份未确认");
+            } catch { throw new Error(`旧分支 Session ${sessionId} 尚未确认可安全重置，请检查对应运行记录`); }
+            finally { clearTimeout(timer); controller.abort(); }
+          }
+        }
+        this.store.resetConversationQueue(key, tasks, message, branches);
         for (const task of tasks) this.inboxScheduled.delete(task.id);
       } else {
+        if (branches) throw new Error("多分支恢复需要启用持久化队列，请由管理员核查旧分支");
         if (message.conversationType === "direct") await this.options.cancelAuthorization?.(message);
         this.store.resetSession(key);
       }
-      this.resetEpochs.set(scope, epoch);
-      this.inboxBlockedScopes.delete(scope);
+      for (const value of scopes) {
+        this.resetEpochs.set(value, epochs.get(value)!);
+        this.inboxBlockedScopes.delete(value);
+      }
       succeeded = true;
       this.store.completeEvent(message.channelType, message.installationId, message.messageId, "completed");
       try { await this.replyText(message, `已开启新会话，已清理 ${tasks.length} 条旧排队或异常消息。下一条消息会创建新的 Agent Session；历史记录保留，已发生的操作不会撤销。`); }
       catch { console.warn("会话已重置，但成功回执发送失败，请查看本地审计"); }
     } finally {
-      this.resetScopes.delete(scope);
-      if (succeeded || (!this.inboxBlockedScopes.has(scope) && !this.authorizationWaits.get(scope)?.size)) this.queue.resume(scope);
+      for (const value of scopes) {
+        this.resetScopes.delete(value);
+        if (branches && !succeeded) this.inboxBlockedScopes.add(value);
+        if (succeeded || (!this.inboxBlockedScopes.has(value) && !this.authorizationWaits.get(value)?.size)) this.queue.resume(value);
+      }
     }
   }
 
@@ -893,6 +930,7 @@ export class Gateway {
 
   private conversationKey(message: IncomingMessage): ConversationKey {
     const key = toConversationKey(message, Boolean(this.options.sharedGroupSessions));
+    if (this.resetScopes.has(this.store.conversationKey(key))) return key;
     return this.options.sharedGroupSessions && message.conversationType === "group" ? this.store.sharedGroupKey(key) : key;
   }
 

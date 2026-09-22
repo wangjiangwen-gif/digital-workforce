@@ -163,3 +163,78 @@ test("准备检查点清理后仍可读取审计证据，重启恢复不会重�
     assert.equal(recovered.queued.length + recovered.interrupted.length, 0);
   } finally { store.close(); }
 });
+
+for (const status of ['idle', 'running', 'unknown'] as const) test(`多旧分支 /new 走独立核查，旧 Session ${status}`, async () => {
+  const store = new GatewayStore(':memory:'); store.acquireRuntimeLock(); const replies: string[] = [], runs: string[] = [];
+  const key = toConversationKey(message('reset'), true);
+  const branches = ['tenant-a', 'tenant-b'].map(tenantId => ({ ...key, tenantId }));
+  const oldMessages = branches.map((branch, i) => message(`old-${i}`, { tenantId: branch.tenantId }));
+  branches.forEach((branch, i) => {
+    store.saveSession(branch, `old-session-${i}`, 'agent');
+    store.receiveMessage(oldMessages[i], { scope: store.conversationKey(branch), agentId: 'agent', configFingerprint: 'old' });
+  });
+  const gateway = new Gateway(store, { createSession: async () => 'fresh-session', run: async id => { runs.push(id); return { terminal: 'idle', messages: ['done'] }; },
+    inspectSessionReadiness: async sessionId => ({ sessionId, agentId: 'agent', status }) },
+    async (_m, out) => { if (out.type === 'text') replies.push(out.text); }, options);
+  try {
+    const reset = message('reset', { text: '/new' });
+    assert.equal(gateway.accept(reset), true);
+    await until(() => replies.length > 0);
+    assert.equal(store.inbox.findMessage(reset), undefined);
+    if (status === 'idle') {
+      assert.match(replies[0], /已开启新会话/);
+      assert.equal(store.sharedGroupKey(key).tenantId, '@shared-group');
+      for (const old of oldMessages) assert.equal(store.inbox.findMessage(old)?.state, 'failed');
+      gateway.accept(message('fresh'));
+      await until(() => store.inbox.findMessage(message('fresh'))?.state === 'completed');
+      assert.deepEqual(runs, ['fresh-session']);
+      assert.equal(gateway.accept(reset), false);
+    } else {
+      assert.match(replies[0], /未重置/);
+      assert.throws(() => store.sharedGroupKey(key), /多个历史会话分支/);
+      for (const old of oldMessages) assert.equal(store.inbox.findMessage(old)?.state, 'queued');
+    }
+    branches.forEach((branch, i) => assert.equal(store.getSession(branch), `old-session-${i}`));
+  } finally { store.close(); }
+});
+
+test('多分支恢复核查期间的新消息保留在新共享入口，重复控制命令不重入', async () => {
+  const store = new GatewayStore(':memory:'); store.acquireRuntimeLock(); const replies: string[] = [], runs: string[] = [];
+  const canonical = toConversationKey(message('reset'), true);
+  for (const tenantId of ['one', 'two']) store.saveSession({ ...canonical, tenantId }, `old-${tenantId}`, 'agent');
+  let release!: () => void;
+  const pending = new Promise<void>(resolve => { release = resolve; });
+  let inspecting = false;
+  const gateway = new Gateway(store, { createSession: async () => 'new', run: async id => { runs.push(id); return { terminal: 'idle', messages: ['done'] }; },
+    inspectSessionReadiness: async sessionId => { inspecting = true; await pending; return { sessionId, agentId: 'agent', status: 'idle' }; } },
+    async (_m, out) => { if (out.type === 'text') replies.push(out.text); }, options);
+  try {
+    gateway.accept(message('reset', { text: '/new' })); await until(() => inspecting);
+    assert.equal(gateway.accept(message('during')), true);
+    gateway.accept(message('duplicate-control', { text: '/new' }));
+    await until(() => replies.some(text => text.includes('正在恢复')));
+    assert.equal(store.inbox.findMessage(message('during'))?.state, 'queued');
+    release(); await until(() => store.inbox.findMessage(message('during'))?.state === 'completed');
+    assert.deepEqual(runs, ['new']);
+    assert.equal(store.getSession(store.sharedGroupKey(canonical)), 'new');
+  } finally { release(); store.close(); }
+});
+
+for (const finished of [true, false]) test(`多分支旧任务${finished ? '有' : '无'}原请求结束证据，不仅检查 Session idle`, async () => {
+  const store = new GatewayStore(':memory:'); store.acquireRuntimeLock(); const replies: string[] = [];
+  const canonical = toConversationKey(message('reset'), true), old = { ...canonical, tenantId: 'one' };
+  store.saveSession(old, 'old-one', 'agent'); store.saveSession({ ...canonical, tenantId: 'two' }, 'old-two', 'agent');
+  const binding = { scope: store.conversationKey(old), agentId: 'agent', configFingerprint: 'old' };
+  const received = store.receiveMessage(message('old-message', { tenantId: 'one' }), binding)!;
+  store.inbox.claim(received.id, binding); store.dispatchMessage(received.id, 'old-one', 'a'.repeat(64)); store.finishMessage(received.id, 'failed');
+  const gateway = new Gateway(store, { createSession: async () => 'new', run: async () => ({ terminal: 'idle', messages: [] }),
+    inspectRun: async () => finished ? ended : { status: 'unknown', reason: 'anchor_not_found' },
+    inspectSessionReadiness: async sessionId => ({ sessionId, status: 'idle', agentId: 'agent' }) },
+    async (_m, out) => { if (out.type === 'text') replies.push(out.text); }, options);
+  try {
+    gateway.accept(message('reset', { text: '/new' })); await until(() => replies.length > 0);
+    assert.equal(store.inbox.findTask(received.id)?.state, finished ? 'failed' : 'uncertain');
+    if (finished) assert.equal(store.sharedGroupKey(canonical).tenantId, '@shared-group');
+    else assert.throws(() => store.sharedGroupKey(canonical), /多个历史会话分支/);
+  } finally { store.close(); }
+});

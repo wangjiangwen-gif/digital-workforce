@@ -201,10 +201,9 @@ export class GatewayStore {
     if (path !== ":memory:") try { chmodSync(path, 0o600); } catch { /* directory permissions remain the outer boundary */ }
   }
 
-  sharedGroupKey(key: ConversationKey): ConversationKey {
+  sharedGroupBranches(key: ConversationKey): ConversationKey[] {
+    if (key.tenantId !== "@shared-group" || key.senderId !== "") throw new Error("只允许核查共享群分支");
     const prefix = [key.channelType, key.installationId].map(escapeKeyPart).join(":") + ":";
-    const route = this.db.prepare("SELECT selected_key FROM shared_group_routes WHERE canonical=?").get(this.conversationKey(key));
-    if (route) return JSON.parse(String(route.selected_key)) as ConversationKey;
     const candidates = new Set<string>();
     const rows = this.db.prepare(`SELECT conversation_key AS scope FROM conversations WHERE substr(conversation_key,1,?)=?
       UNION SELECT scope FROM gateway_message_inbox WHERE channel_type=? AND installation_id=?
@@ -217,14 +216,18 @@ export class GatewayStore {
       if (parts.length === 6 && parts[0] === key.channelType && parts[1] === key.installationId
         && parts[3] === key.conversationId && parts[4] === (key.threadId || "-") && parts[5] === "-") candidates.add(scope);
     }
-    // 唯一旧分支保持原 key，连同 Session、密文 AAD 和未完成任务证据一起复用。
-    // 多分支不能猜测谁是主会话，更不能把既有任务静默重放到另一 Session。
-    if (candidates.size > 1) throw new Error("该群或话题存在多个历史会话分支，请管理员核查并处理旧分支后再继续；本次消息未入队，未重跑旧任务。");
-    if (candidates.size === 1) {
-      const parts = [...candidates][0].split(":").map(decodeURIComponent);
+    return [...candidates].map(scope => {
+      const parts = scope.split(":").map(decodeURIComponent);
       return { ...key, tenantId: parts[2], ...(parts[2] !== "@shared-group" ? { sharedGroup: true } : {}) };
-    }
-    return key;
+    });
+  }
+
+  sharedGroupKey(key: ConversationKey): ConversationKey {
+    const route = this.db.prepare("SELECT selected_key FROM shared_group_routes WHERE canonical=?").get(this.conversationKey(key));
+    if (route) return JSON.parse(String(route.selected_key)) as ConversationKey;
+    const branches = this.sharedGroupBranches(key);
+    if (branches.length > 1) throw new Error("该群或话题存在多个历史会话分支。可 @机器人发送 /new 核查旧分支并开启新会话；本次消息未入队，未重跑旧任务。");
+    return branches[0] || key;
   }
 
   selectSharedGroupSession(key: ConversationKey, sessionId: string): void {
@@ -448,16 +451,37 @@ export class GatewayStore {
     }
   }
 
-  resetConversationQueue(key: ConversationKey, expected: InboxTask[], command: ChannelMessage): void {
+  resetConversationQueue(key: ConversationKey, expected: InboxTask[], command: ChannelMessage, branches?: ConversationKey[]): void {
     this.assertRuntimeLock();
     const scope = this.conversationKey(key);
+    const scopes = new Set([scope, ...(branches || []).map(branch => this.conversationKey(branch))]);
     this.messageTransaction(() => {
-      if (this.sessionCreations.pending(scope)) throw new Error("Session 创建结果尚未核实，暂不能重置");
+      if (branches) {
+        if (command.conversationType !== "group" || key.tenantId !== "@shared-group" || key.senderId !== ""
+          || key.channelType !== command.channelType || key.installationId !== command.installationId
+          || key.conversationId !== command.conversationId || key.threadId !== command.threadId)
+          throw new Error("分支恢复范围无效");
+        const actual = new Set(this.sharedGroupBranches(key).map(branch => this.conversationKey(branch)));
+        for (const branch of branches) {
+          if (!actual.has(this.conversationKey(branch))) throw new Error("旧分支范围已变化，请重新核查");
+        }
+        if ([...actual].some(value => !scopes.has(value))) throw new Error("恢复期间出现新分支，请重新核查");
+      }
+      if ([...scopes].some(value => this.sessionCreations.pending(value))) throw new Error("Session 创建结果尚未核实，暂不能重置");
       for (const task of expected) {
-        if (task.binding.scope !== scope || task.message.channelType !== command.channelType
+        if (!scopes.has(task.binding.scope) || task.message.channelType !== command.channelType
           || task.message.installationId !== command.installationId) throw new Error("重置任务超出当前会话范围");
         const cancelled = this.inbox.cancelForReset(task);
         this.updateMessageEvent(cancelled, "failed", Boolean(task.sessionId), task.state === "uncertain" ? "uncertain" : "processing");
+      }
+      if (branches) {
+        const pending = this.db.prepare("SELECT scope FROM gateway_message_inbox WHERE channel_type=? AND installation_id=? AND state NOT IN ('completed','failed')")
+          .all(command.channelType, command.installationId);
+        if (pending.some(row => String(row.scope) !== scope && scopes.has(String(row.scope))))
+          throw new Error("旧分支仍有未处理任务，未切换共享会话");
+        // 固定新入口，旧 Session 映射及密文任务证据保留为历史分支。
+        this.db.prepare("INSERT INTO shared_group_routes VALUES (?, ?) ON CONFLICT(canonical) DO UPDATE SET selected_key=excluded.selected_key")
+          .run(scope, JSON.stringify(key));
       }
       this.resetSession(key);
       this.addAuditLog({ channelType: command.channelType, installationId: command.installationId,
