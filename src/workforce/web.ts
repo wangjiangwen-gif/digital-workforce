@@ -60,6 +60,7 @@ export async function createWeb(
   w: Workforce,
   options: {
     port: number;
+    publicOrigin?: string;
     initializer?: MaInitializer;
     publicDir?: string;
     extractorMode?: string;
@@ -72,6 +73,23 @@ export async function createWeb(
     environments?: MaEnvironments;
   },
 ) {
+  let publicOrigin: URL | undefined;
+  if (options.publicOrigin) {
+    try {
+      publicOrigin = new URL(options.publicOrigin);
+      if (
+        publicOrigin.protocol !== 'https:' ||
+        publicOrigin.username ||
+        publicOrigin.password ||
+        publicOrigin.pathname !== '/' ||
+        publicOrigin.search ||
+        publicOrigin.hash
+      )
+        throw new Error('invalid origin');
+    } catch {
+      throw new Error('WORKFORCE_PUBLIC_ORIGIN 必须为不含路径和凭证的 HTTPS Origin');
+    }
+  }
   const lab = new LocalLab(w);
   const publicDir = options.publicDir || resolve('public');
   const server = createServer(async (req, res) => {
@@ -84,8 +102,10 @@ export async function createWeb(
     );
     try {
       const host = req.headers.host || '';
-      if (!/^127\.0\.0\.1:\d+$/.test(host)) throw new DomainError('只允许本机地址访问', 403);
-      const origin = `http://${host}`;
+      const publicRequest = publicOrigin?.host === host;
+      if (!publicRequest && !/^127\.0\.0\.1:\d+$/.test(host))
+        throw new DomainError('只允许本机或已配置域名访问', 403);
+      const origin = publicRequest ? publicOrigin!.origin : `http://${host}`;
       if (req.headers.origin && req.headers.origin !== origin) throw new DomainError('拒绝跨站请求', 403);
       const url = new URL(req.url || '/', origin);
       const path = url.pathname;

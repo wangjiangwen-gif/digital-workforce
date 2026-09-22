@@ -73,6 +73,7 @@ const initializer = new MaInitializer(workspace, maConfig, channels, memories);
 const { server, url } = await createWeb(w, {
   initializer,
   port,
+  publicOrigin: process.env.WORKFORCE_PUBLIC_ORIGIN,
   extractorMode,
   workspace,
   channels,

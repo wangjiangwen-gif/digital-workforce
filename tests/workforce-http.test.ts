@@ -1,4 +1,5 @@
 import test from 'node:test';
+import { request as httpRequest } from 'node:http';
 import assert from 'node:assert/strict';
 import { Workforce } from '../src/workforce/domain.ts';
 import { createWeb, saveAccessToken } from '../src/workforce/web.ts';
@@ -44,3 +45,46 @@ test('HTTP后端认证、草稿发布和越权检查真实生效，不接受跨�
     w.close();
   }
 });
+
+test('显式 HTTPS 域名支持同源代理请求，拒绝伪造域名、来源和转发头', async () => {
+  const w = new Workforce(':memory:');
+  const { server, url } = await createWeb(w, { port: 0, publicOrigin: 'https://workspace.example.test' });
+  try {
+    for (const [headers, status] of [
+      [{ Host: 'workspace.example.test', Origin: 'https://workspace.example.test' }, 200],
+      [{ Host: 'workspace.example.test', Origin: 'https://evil.test' }, 403],
+      [{ Host: 'evil.test', 'X-Forwarded-Host': 'workspace.example.test' }, 403],
+      [{ Host: 'workspace.example.test', Origin: 'http://workspace.example.test' }, 403],
+    ] as const)
+      assert.equal(
+        await new Promise<number>((resolve, reject) => {
+          const req = httpRequest(url + '/', { headers }, (res) => {
+            res.resume();
+            resolve(res.statusCode!);
+          });
+          req.on('error', reject);
+          req.end();
+        }),
+        status,
+      );
+    assert.equal((await fetch(url + '/')).status, 200);
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    w.close();
+  }
+});
+
+for (const publicOrigin of [
+  'http://workspace.example.test',
+  'https://user:pass@workspace.example.test',
+  'https://workspace.example.test/path',
+  'https://workspace.example.test?token=x',
+])
+  test(`拒绝无效公网 Origin ${publicOrigin}`, async () => {
+    const w = new Workforce(':memory:');
+    try {
+      await assert.rejects(createWeb(w, { port: 0, publicOrigin }), /HTTPS Origin/);
+    } finally {
+      w.close();
+    }
+  });
