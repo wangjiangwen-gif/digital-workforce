@@ -1786,7 +1786,8 @@ document.addEventListener('click', async (event) => {
   }
 });
 document.addEventListener('submit', async (event) => {
-  if (['ma-config-form', 'existing-feishu-form', 'manual-feishu-group-form'].includes(event.target.id)) return;
+  if (['ma-config-form', 'existing-feishu-form', 'manual-feishu-group-form'].includes(event.target.id))
+    return;
   event.preventDefault();
   const form = event.target;
   const values = Object.fromEntries(new FormData(form));
