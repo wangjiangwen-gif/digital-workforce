@@ -83,6 +83,32 @@ class ValidatorTests(unittest.TestCase):
         self.refresh('review-items.json')
         self.assertIn('PENDING_REVIEW', self.errors())
 
+    def setup_v2(self):
+        self.manifest.update(schema_version=2, rules_version='weekly-v2.1', stage='report')
+        self.manifest['files'].pop('report.html')
+        (self.root/'report.html').unlink()
+        (self.root/'report.md').write_text('\n'.join(validator.SECTIONS_V2)+'\nevent-1 https://example.com/source')
+        self.refresh('report.md')
+        approvals={}
+        for gate,artifact in [('HC1','sample-annotations.json'),('HC2','full-annotations.json')]:
+            self.put(artifact, {'rows':[{'row_id':'fixture-1'}]});self.refresh(artifact)
+            approvals[gate]=dict(run_id='run-1',project_id='project-1',input_sha256='a'*64,rules_version='weekly-v2.1',gate=gate,decision='approved',actor_id='user',message_id='om-confirm-'+gate,approved_at='2026-09-23T12:00:00+08:00',artifact_sha256=self.manifest['files'][artifact])
+        self.put('approvals.json',approvals);self.refresh('approvals.json')
+        for name in ['sample-health.json','full-health.json']:
+            self.put(name,dict(run_id='run-1',rules_version='weekly-v2.1',status='ready_for_review'));self.refresh(name)
+        self.put('cost.json',dict(complete=True));self.refresh('cost.json')
+
+    def test_v2_report_does_not_require_html_before_hc3(self):
+        self.setup_v2();self.assertEqual(self.errors(),[])
+
+    def test_v2_rejects_changed_approved_batch(self):
+        self.setup_v2();self.put('full-annotations.json',{'changed':True});self.refresh('full-annotations.json')
+        self.assertIn('APPROVAL_REQUIRED',self.errors())
+
+    def test_v2_webpage_requires_hc3(self):
+        self.setup_v2();self.manifest['stage']='webpage';self.put('output-manifest.json',self.manifest)
+        self.assertIn('APPROVAL_REQUIRED',self.errors())
+
 
 if __name__ == '__main__':
     unittest.main()

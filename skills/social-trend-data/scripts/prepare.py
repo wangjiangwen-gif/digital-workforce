@@ -7,6 +7,7 @@ import math
 from collections import defaultdict, deque
 from datetime import datetime
 from pathlib import Path
+from workflow import normalize_heat
 
 
 def timestamp(value):
@@ -80,7 +81,9 @@ def prepare(input_path, start, end, sample_limit=500):
         if bad:
             continue
         seen.add(identity)
+        row["row_id"] = hashlib.sha256(json.dumps(identity, ensure_ascii=False).encode()).hexdigest()[:24]
         valid.append(row)
+    valid = normalize_heat(valid)
     buckets = defaultdict(list)
     for row in valid:
         local_date = timestamp(row['published_at']).astimezone(start.tzinfo).date().isoformat()
@@ -96,6 +99,7 @@ def prepare(input_path, start, end, sample_limit=500):
                'period_start': start.isoformat(), 'period_end': end.isoformat(),
                'input_count': len(rows), 'valid_count': len(valid), 'sample_count': len(sample),
                'valid_record_ratio': len(valid) / len(rows) if rows else None,
+               'rules_version': 'weekly-v2.1', 'heat_normalization': 'platform log1p + linear P1/P99, clip [0,100]; constant/missing=null',
                'sampling': '按平台与日期分层，稳定哈希排序，轮询取样',
                'approved': False, 'label_agreement': None, 'merge_precision': None, 'issues': issues}
     return {'normalized.json': valid, 'sample.json': sample, 'quality.json': quality}

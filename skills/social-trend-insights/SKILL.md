@@ -1,20 +1,16 @@
 ---
 name: social-trend-insights
-description: "[social-trends] 社媒热点事件合并与洞察：依据主体、动作、时间和来源合并事件，生成可追溯事件宽表，完成热点格局、传播变化、内容机会、风险与行动四维分析。"
+description: "[social-trends] 周报 V2 四版块洞察：行业及热门话题、营销节点、平台新鲜事、营销发现；脚本统计和热点词审计，HC2 后生成有来源的报告内容。"
 metadata:
   tags: social-trends
   platform: digital-workforce
 ---
+# 四版块洞察 · weekly-v2.1
 
-# 事件合并与四维洞察
+先读取 references/scoring.md。只使用同一run_id、数据和规则版本的全量结果，核对HC1/HC2真实确认记录。没有HC2就返回待验收，不把旧的“热点格局/传播变化/内容机会/风险与行动”当作本报告四版块。
 
-输入为已核验记录及质量报告；全量处理前检查当前数据、规则与 Skill 版本对应的样本验收记录。仅有用户说“继续”而无法确认对应批次时，先确认范围。
+运行 scripts/statistics.py 生成 statistics.json、candidates.json、e3_word_freq_audit.md。计算交给脚本，写作只依据统计与来源。E1-E4 可并发撰写；缺依赖时保留可完成版块及阻塞原因，不能填满假数据。
 
-1. 对每条数据提取主体、核心动作、对象、时间、地点、明确事实和来源。一个主题可以有多个事件，不能仅凭词汇相似就合并。
-2. 为事件分配稳定 event_id，保存 record_id → event_id 映射、代表标题、全部来源、合并依据、不确定标记。每条输入至多归入一个主事件，不确定项保留待核验；不要把“未证实”改写为确定事实。
-3. 可按平台或日期分批分析，但最终合并前检查跨批重复；并发结果统一字段结构，保留失败批次，不用空白结果伪装成功。
-4. 数值计算由脚本执行。平台内热度可做同口径百分位比较；总体不输出未经确认的跨平台综合分。具体规则见 references/scoring.md。
-5. 输出四维洞察：热点格局、传播变化、内容机会、风险与行动。每个观点带 event_id 与来源；无历史基线时不判断增长，无对照设计时不声称营销因果效果。
-6. 面向营销给出条件性机会与下一步，不凭社媒热度预测销售，不推断个人敏感属性，不把传闻当事实。
+每个重点结论关联 event_id、row_id、原始source_url。不将传闻变事实，不把热度当销售或因果。节点日历只认已提供的真实日期。E4二次打标只有真实能力可用才执行，失败按规则降级并披露。
 
-输出 events.json、record-event-map.json、insights.md、review-items.json。每份结果记录 run_id 和数据周期。人工修正的事件归并或规则反馈只能作为待确认记忆候选，不能直接写进只读项目 Memory。
+输出 E1.md/E2.md/E3.md/E4.md、insights.md、events.json（仅收录实际进入报告的事件，并保留到全量宽表的引用）和review-items.json。不确定项保留待核验，不能删除来绕过Validator。rules_version=weekly-v2.1，运行目录与输入SHA256贯穿全部产物。

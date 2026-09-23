@@ -1,36 +1,24 @@
-# 最终产物契约 v1
+# V2 分阶段产物契约
 
-所有文件放在单独的本轮目录；不允许符号链接。输出使用 UTF-8，每个文件不超过 20 MB。
+每轮新建独立目录，UTF-8，单文件≤20MB，不允许符号链接。保留 run_id / project_id / period（含时区[start,end)）/原始input_sha256。
 
-`output-manifest.json`：
+output-manifest.json：schema_version=2、rules_version=weekly-v2.1、stage=report或webpage、delivery_status=draft，以及上述上下文；files 为下面所需文件名→真实SHA256映射。
 
-```json
-{
-  "schema_version": 1,
-  "run_id": "run-20260922-001",
-  "project_id": "project-example",
-  "period": {"start":"2026-09-14T00:00:00+08:00","end":"2026-09-21T00:00:00+08:00"},
-  "input_sha256": "原始输入文件的64位SHA256",
-  "delivery_status": "draft",
-  "files": {
-    "events.json": "文件SHA256",
-    "quality.json": "文件SHA256",
-    "review-items.json": "文件SHA256",
-    "report.md": "文件SHA256",
-    "report.html": "文件SHA256"
-  }
-}
-```
+共同文件：
+- events.json：对象，包含上下文及events数组。每个事件唯一event_id和真实source_urls；只收录报告中实际引用的事件，全量映射另存，不为符合校验而把全部原始事件塞进报告。
+- quality.json：数据脚本结果，input_sha256、period_start/period_end、valid_count与本轮一致，approved:false保持不变。
+- review-items.json：对象，含上下文与items数组。未解决问题不得删除；项须有status=resolved及resolution；无法处理则验证失败。
+- report.md：四业务版块加一句话结论、周期与质量、来源与限制；重点事件列ID及原始链接。二级标题使用“## 营销发现”，该部分≤1800字（当前脚本保守按去空白文本计数，包含链接）。
+- sample-annotations.json / full-annotations.json：对象，保存本次提交人工验收的完整标注结果（例如{rows:[...],phase1_health:{...},phase2_health:{...}}）。不可只提交空摘要，须真实完整产物。
+- sample-health.json / full-health.json：最终合并健康度，run_id、rules_version一致，status=ready_for_review。每批还须保留两阶段health及错误明细；LLM不得自行改健康度状态。
+- cost.json：人工可核对的真实调用账单汇总，complete=true仅在所有任务/补跑/洞察成本均已记录时设置。未提供成本不伪造完整交付。
+- approvals.json：HC1/HC2各一对象；网页阶段额外HC3。字段：gate、decision=approved、run_id、project_id、input_sha256、rules_version、artifact_sha256、actor_id、message_id、approved_at(含时区)。HC1绑定sample-annotations.json，HC2绑定full-annotations.json，HC3绑定approved-report.md。
 
-示例哈希必须替换为实际文件的 SHA256。先完成文件，再用 Python `hashlib.sha256(path.read_bytes()).hexdigest()` 计算，不能手写占位值。
+审批记录必须来自用户明确决定并可回读飞书消息，不能由Agent假装审批人；脚本仅验证字段与哈希，不证明消息真实性或有审批权限。业务方没有批准时即waiting_HC1/HC2/HC3。
 
-- events.json：顶层包含与清单一致的 run_id、project_id、period、input_sha256，另有非空 events 数组；每个事件必须有唯一 event_id 和非空 source_urls 数组（HTTP(S) URL，无内嵌凭证）。其余分析字段可保留。
-- quality.json：复用数据 Skill 实际产生的质量文件，input_sha256、period_start / period_end 与清单中的 period.start / period.end 一致，valid_count 为正整数。不能将 approved:false 改写成真实人工审批；样本验收记录另行复核。
-- review-items.json：包含同样的四个上下文字段及 items 数组。没有问题时为 []；有问题时每项须包含 status:"resolved" 与非空 resolution 处理依据。不要删除未解决项绕过验证。
-- report.md 与 report.html：必须包含“一句话结论、周期与质量、热点格局、传播变化、内容机会、风险与行动、事件清单、行动建议、来源与限制”；列出本轮每个事件 ID 及至少一个对应来源链接。不能残留 TODO/TBD/模板占位符。
-- HTML 使用完整静态 html/body，样式写在固定 style 标签中；不允许脚本、事件属性、内联 style、iframe、表单、SVG、外部样式或非 HTTP(S) 资源。动态文本一律转义。
-- validation.json：由脚本产生。status 为 failed 或 draft_validated，errors 包含 code/file/message，另有本次读取文件的 SHA256。禁止手工改写验证结果。
+stage=report：允许只有Markdown，HC1/HC2后提交飞书待审，不提前要求HTML或HC3。
+stage=webpage：额外要求 approved-report.md（HC3后真实飞书回读快照）、report.html；report.md与快照必须相同。HTML完整html/body，动态内容转义；禁止脚本、事件属性、iframe、表单、SVG、外部样式及非http/https资源。不伪造/绕过私有图片鉴权，不能读取图片时报告阻塞。
 
-## 验证边界
+运行 `python3 <本Skill>/scripts/validate.py --run-dir <目录>`。输出validation.json及退出码；0仅为draft_validated。外部发布必须通过真实回读并另存delivery-receipt.json，不能在本地清单自报published。
 
-哈希用于识别本轮文件是否变化，不是可信签名。事件引用检查不等于证明来源真实或数字正确，HTML 检查也不是通用浏览器安全沙箱。必须再做 SKILL.md 要求的语义复核。真实网页或飞书发布状态需独立回读验证，不能用本地 manifest 自证。
+还需人工/语义复核：E1-E4口径、八路健康度、节点日历日期、来源真实性、HC3删改及截图完整性、发布可见范围。旧schema_version=1只为已有产物兼容，新流程必须使用2。

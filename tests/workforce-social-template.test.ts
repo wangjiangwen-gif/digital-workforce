@@ -271,3 +271,28 @@ test('旧报告技能升级一次，创建后回读暂时失败不丢失新资�
     f.close();
   }
 });
+
+test('周报 V2 初始化明确三个人工关卡和 DataHub 未接入边界', async () => {
+  const { createSocialEmployee } = await import('../src/workforce/social-template.ts');
+  const e = createSocialEmployee();
+  const config = JSON.parse(e.memories.find((m: any) => m.path === 'config/dependencies.md')!.content);
+  assert.equal(config.rules_version, 'weekly-v2.1');
+  assert.equal(config.datahub.enabled, false);
+  assert.equal(config.annotation_tasks.length, 8);
+  assert.equal(config.checkpoints.length, 3);
+  assert.match(e.knowledge, /行业及热门话题/);
+  assert.match(e.rules, /HC3后回读/);
+});
+
+for (const path of [
+  'skills/social-trend-data/scripts/test_workflow.py',
+  'skills/social-trend-insights/scripts/test_statistics.py',
+]) {
+  test(`周报文件处理行为：${path}`, () => {
+    const result = spawnSync('python3', [path], {
+      encoding: 'utf8',
+      env: { ...process.env, PYTHONDONTWRITEBYTECODE: '1' },
+    });
+    assert.equal(result.status, 0, result.stderr);
+  });
+}
