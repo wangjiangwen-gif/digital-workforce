@@ -221,3 +221,28 @@ test('外部群添加失败展示明确原因，其他错误不透传敏感内�
   );
   assert.deepEqual(parseLarkResult(JSON.stringify({ ok: true, data: { items: [] } })), { items: [] });
 });
+
+test('手动群 ID 关联无需个人凭证，幂等且不伪造在群员工', () => {
+  const f = fixture();
+  const id = 'oc_e35611bee2ba981bafc156118228a955';
+  try {
+    const current = f.workspace.read();
+    current.state.projects.push(
+      ...['p', 'other'].map((id) => ({ id, name: id, groups: [], memories: [], memoryStores: [] })),
+    );
+    f.workspace.save(current.state, current.revision);
+    f.service.importManual(' ' + id + ' ', 'p');
+    const result = f.service.importManual(id, 'p');
+    assert.equal(result.state.groups.length, 1);
+    assert.equal(result.state.groups[0].projectId, 'p');
+    assert.equal(result.state.groups[0].source, 'manual');
+    assert.deepEqual(result.state.groups[0].employeeIds, []);
+    assert.equal(f.calls.length, 0);
+    assert.throws(() => f.service.importManual(id, 'other'), /其他项目/);
+    assert.throws(() => f.service.importManual(id, 'missing'), /项目不存在/);
+    for (const bad of ['oc_test', 'ou_e35611bee2ba981bafc156118228a955', 'https://feishu.cn/group'])
+      assert.throws(() => f.service.importManual(bad, 'p'), /Chat ID/);
+  } finally {
+    f.workspace.close();
+  }
+});

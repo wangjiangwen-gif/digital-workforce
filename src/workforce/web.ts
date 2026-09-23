@@ -240,6 +240,9 @@ export async function createWeb(
             const input = await body(req);
             if (typeof input.chatId !== 'string') throw new DomainError('请选择飞书群聊');
             if (typeof input.projectId !== 'string' || !input.projectId) throw new DomainError('请选择项目');
+            if (input.mode === 'manual')
+              return json(res, options.feishuGroups.importManual(input.chatId, input.projectId));
+            if (input.mode !== undefined) throw new DomainError('不支持的群聊关联方式');
             return json(res, await options.feishuGroups.import(input.chatId, input.projectId));
           }
         }

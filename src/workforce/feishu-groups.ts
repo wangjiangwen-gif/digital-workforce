@@ -121,6 +121,15 @@ export class FeishuGroups {
     if (!chat) throw new DomainError('当前用户不是该群的群主或管理员，或群已解散。', 403);
     return this.persist(chat, undefined, projectId);
   }
+  importManual(chatId: string, projectId: string) {
+    const id = chatId.trim();
+    if (!/^oc_[a-f0-9]{32}$/.test(id))
+      throw new DomainError('请填写 oc_ 开头、后接 32 位小写十六进制字符的飞书群 Chat ID，不是群链接或群号');
+    if (!projectId || !this.workspace.read().state.projects.some((p: any) => p.id === projectId))
+      throw new DomainError('项目不存在', 404);
+    const existing = this.workspace.read().state.groups.find((g: any) => g.chatId === id);
+    return this.persist({ chatId: id, name: existing?.name || id }, undefined, projectId, 'manual');
+  }
   async members(groupId: string, pageToken = '') {
     if (pageToken.length > 4096) throw new DomainError('分页参数无效');
     const group = this.workspace.read().state.groups.find((g: any) => g.id === groupId);
@@ -151,11 +160,16 @@ export class FeishuGroups {
       limited: Boolean(page.trigger_security_conf_limit),
     };
   }
-  private persist(chat: { chatId: string; name: string }, employeeId?: string, projectId?: string) {
+  private persist(
+    chat: { chatId: string; name: string },
+    employeeId?: string,
+    projectId?: string,
+    source = 'feishu',
+  ) {
     const latest = this.workspace.read();
     let group = latest.state.groups.find((g: any) => g.chatId === chat.chatId);
     if (!group) {
-      group = { id: randomUUID(), ...chat, projectId: '', employeeIds: [], source: 'feishu' };
+      group = { id: randomUUID(), ...chat, projectId: '', employeeIds: [], source };
       latest.state.groups.push(group);
     }
     if (projectId !== undefined) {
@@ -166,7 +180,7 @@ export class FeishuGroups {
       group.projectId = projectId;
     }
     group.name = chat.name;
-    group.source = 'feishu';
+    group.source = source === 'manual' ? group.source || source : source;
     if (employeeId && !group.employeeIds.includes(employeeId)) group.employeeIds.push(employeeId);
     return this.workspace.save(latest.state, latest.revision);
   }

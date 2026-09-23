@@ -878,6 +878,40 @@ let feishuGroupsFound = [];
 let feishuScanned = 0;
 let feishuFailed = 0;
 let groupLoadGeneration = 0;
+function manualFeishuGroup() {
+  groupLoadGeneration++;
+  modal(
+    '将飞书群关联到项目',
+    `<form id="manual-feishu-group-form" data-project-id="${esc(route().id)}">
+    <label for="manual-chat-id">飞书群 Chat ID</label>
+    <input id="manual-chat-id" name="chatId" required pattern="oc_[a-f0-9]{32}" placeholder="例如：oc_e35611bee2ba981bafc156118228a955" autocomplete="off" />
+    <p class="muted">填写 oc_ 开头、后接 32 位小写十六进制字符的 Chat ID，不是群号、群名称或邀请链接。无需飞书个人凭证；仅保存项目关联，群名称和在群员工由机器人事件同步。请确认 ID 无误，并在飞书中将机器人加入该群。</p>
+    <p id="manual-group-error" class="error" role="alert"></p>
+    <div class="actions form-actions">${button('取消', 'close')}<button type="submit" class="primary">关联到项目</button></div></form>`,
+  );
+}
+document.addEventListener('submit', async (event) => {
+  if (event.target.id !== 'manual-feishu-group-form') return;
+  event.preventDefault();
+  const form = event.target;
+  const submit = form.querySelector('[type="submit"]');
+  submit.disabled = true;
+  try {
+    const result = await request('/feishu-groups', 'POST', {
+      mode: 'manual',
+      projectId: form.dataset.projectId,
+      chatId: new FormData(form).get('chatId').trim(),
+    });
+    acceptServer(result);
+    if (form.isConnected) closeModal();
+    render();
+    toast('群聊已关联项目，请在飞书中添加机器人');
+  } catch (error) {
+    if (form.isConnected) form.querySelector('[role="alert"]').textContent = error.message;
+  } finally {
+    submit.disabled = false;
+  }
+});
 async function browseFeishuGroups(more = false) {
   const generation = ++groupLoadGeneration;
   if (!more) {
@@ -905,7 +939,7 @@ async function browseFeishuGroups(more = false) {
     if (generation === groupLoadGeneration && $('#modal').open)
       modal(
         '从飞书选择群聊',
-        `<p class="error">${esc(error.message)}</p>${button('重新拉取', 'browse-feishu-groups')}${button('关闭', 'close')}`,
+        `<p class="error">${esc(error.message)}</p>${button('手动填写群 ID', 'manual-feishu-group', '', true)}${button('重新拉取', 'browse-feishu-groups')}${button('关闭', 'close')}`,
       );
   }
 }
@@ -1270,7 +1304,7 @@ function projectDetail(p, section) {
       `<div class="actions">${button('整理近期 Session', 'organize-memory', p.id)}</div>` +
       memoryList(p, true);
   if (section === 'groups')
-    content = `<div class="section-toolbar"><p class="muted">群内员工加载自身记忆和本项目记忆；关联变更后请使用 /new。</p><div class="actions">${button('＋ 从飞书关联群聊', 'browse-feishu-groups', '', true)}</div></div><div class="grid compact-cards">${p.groups.map((group) => `<article class="entity-card">${entityMark('groups', group.id)}<h3><a href="#groups/${esc(group.id)}">${esc(group.name)}</a></h3><p class="card-description resource-id" title="${esc(group.chatId)}">${esc(group.chatId)}</p><p class="muted">数字员工 · ${esc(group.employeeIds.map(employeeName).join('、') || '尚未配置')}</p><div class="actions">${button('添加数字员工', 'invite-project-group', group.id, true)}${button('解除关联', 'remove-group', group.id)}</div></article>`).join('')}</div>${!p.groups.length ? empty('尚未关联群聊', '将群聊关联到项目，组织项目协作。') : ''}`;
+    content = `<div class="section-toolbar"><p class="muted">群内员工加载自身记忆和本项目记忆；关联变更后请使用 /new。</p><div class="actions">${button('＋ 从飞书关联群聊', 'browse-feishu-groups', '', true)}${button('手动填写群 ID', 'manual-feishu-group')}</div></div><div class="grid compact-cards">${p.groups.map((group) => `<article class="entity-card">${entityMark('groups', group.id)}<h3><a href="#groups/${esc(group.id)}">${esc(group.name)}</a></h3><p class="card-description resource-id" title="${esc(group.chatId)}">${esc(group.chatId)}</p><p class="muted">数字员工 · ${esc(group.employeeIds.map(employeeName).join('、') || '尚未配置')}</p><div class="actions">${button('添加数字员工', 'invite-project-group', group.id, true)}${button('解除关联', 'remove-group', group.id)}</div></article>`).join('')}</div>${!p.groups.length ? empty('尚未关联群聊', '将群聊关联到项目，组织项目协作。') : ''}`;
   return (
     '<a class="back" href="#projects">← 项目</a>' +
     head(p.name, p.description, button('编辑项目', 'edit-project')) +
@@ -1518,6 +1552,7 @@ document.addEventListener('click', async (event) => {
   if (action === 'existing-feishu') return existingFeishu(feishuDialogId);
   if (action === 'view-feishu') return openFeishu(owner.id);
   if (action === 'new-task') return editDialog('task');
+  if (action === 'manual-feishu-group') return manualFeishuGroup();
   if (action === 'browse-feishu-groups') return browseFeishuGroups();
   if (action === 'more-feishu-groups') return browseFeishuGroups(true);
   if (action === 'invite-project-group') {
@@ -1751,7 +1786,7 @@ document.addEventListener('click', async (event) => {
   }
 });
 document.addEventListener('submit', async (event) => {
-  if (['ma-config-form', 'existing-feishu-form'].includes(event.target.id)) return;
+  if (['ma-config-form', 'existing-feishu-form', 'manual-feishu-group-form'].includes(event.target.id)) return;
   event.preventDefault();
   const form = event.target;
   const values = Object.fromEntries(new FormData(form));
