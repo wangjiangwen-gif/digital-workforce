@@ -331,7 +331,7 @@ export class Gateway {
             finally { clearTimeout(timer); controller.abort(); }
           }
         }
-        this.store.resetConversationQueue(key, tasks, message, branches);
+        this.store.resetConversationQueue(key, tasks, message, branches, this.options.sessionRequestReadOnly);
         for (const task of tasks) this.inboxScheduled.delete(task.id);
       } else {
         if (branches) throw new Error("多分支恢复需要启用持久化队列，请由管理员核查旧分支");
@@ -1269,7 +1269,7 @@ export class Gateway {
           const extraVaultIds = preparing ? await preparing.step("user-vaults", "hook", { message }, getVaults) : await getVaults();
           const vaultIds = [...new Set([this.options.vaultId, ...extraVaultIds])];
           const build = () => this.buildSessionCreateRequest(message, vaultIds, initialResources);
-          const request = preparing ? await preparing.step("session-request", "hook", { message, vaultIds, initialResources }, build) : await build();
+          const request = preparing ? await preparing.step("session-request", this.options.sessionRequestReadOnly ? "observation" : "hook", { message, vaultIds, initialResources }, build) : await build();
           const create = async (recovering: boolean) => {
             if (recovering) {
               const previous = this.store.sessionCreations.latest(this.store.sessionCreationScope(key, reusableSession, message.messageId));
@@ -2047,6 +2047,8 @@ export type GatewayOptions = {
   sessionConfigurationRevision?: string;
   dualIdentity?: boolean;
   sessionEnvironment?: (message: IncomingMessage) => Record<string, string>;
+  // 请求构建及环境回调只允许读取；同时适用于该运行时历史版本的 session-request 步骤。
+  sessionRequestReadOnly?: boolean;
   buildSessionRequest?: (
     message: IncomingMessage,
     draft: SessionCreateRequest

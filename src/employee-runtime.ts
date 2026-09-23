@@ -12,6 +12,7 @@ export function createEmployeeRuntime(input: {
   config: { feishuAppId: string; feishuAppSecret: string; arkAgentId: string; arkEnvironmentId: string; arkVaultId: string; sessionTimeoutMs: number };
   sessionConfiguration?: GatewayOptions["sessionConfiguration"];
   buildSessionRequest?: GatewayOptions["buildSessionRequest"];
+  sessionRequestReadOnly?: boolean;
   ensureBotToken: (allowCreate?: boolean) => Promise<void>;
   verifyQueuedMessages?: boolean;
   runtimeRevision?: string; durableQueue?: boolean; pdfInputMode?: "file" | "sandbox";
@@ -47,6 +48,7 @@ export function createEmployeeRuntime(input: {
   gateway = new Gateway(store, ark, (message, outbound, observer) => channel.reply(message, outbound, observer), {
     reportDiagnostics: true,
     appId: config.feishuAppId, sessionConfiguration, buildSessionRequest: input.buildSessionRequest, sessionConfigurationRevision: runtimeRevision,
+    sessionRequestReadOnly: input.sessionRequestReadOnly,
     pdfInputMode: input.pdfInputMode || "file",
     agentId: config.arkAgentId, environmentId: config.arkEnvironmentId, vaultId: config.arkVaultId,
     timeoutMs: config.sessionTimeoutMs, platformAccess: true, downloadAttachment: (resource, message, maxBytes) => channel.download(resource, message, maxBytes),

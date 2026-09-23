@@ -451,7 +451,7 @@ export class GatewayStore {
     }
   }
 
-  resetConversationQueue(key: ConversationKey, expected: InboxTask[], command: ChannelMessage, branches?: ConversationKey[]): void {
+  resetConversationQueue(key: ConversationKey, expected: InboxTask[], command: ChannelMessage, branches?: ConversationKey[], sessionRequestReadOnly = false): void {
     this.assertRuntimeLock();
     const scope = this.conversationKey(key);
     const scopes = new Set([scope, ...(branches || []).map(branch => this.conversationKey(branch))]);
@@ -471,7 +471,7 @@ export class GatewayStore {
       for (const task of expected) {
         if (!scopes.has(task.binding.scope) || task.message.channelType !== command.channelType
           || task.message.installationId !== command.installationId) throw new Error("重置任务超出当前会话范围");
-        const cancelled = this.inbox.cancelForReset(task);
+        const cancelled = this.inbox.cancelForReset(task, sessionRequestReadOnly);
         this.updateMessageEvent(cancelled, "failed", Boolean(task.sessionId), task.state === "uncertain" ? "uncertain" : "processing");
       }
       if (branches) {

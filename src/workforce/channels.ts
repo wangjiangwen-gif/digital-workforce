@@ -581,6 +581,8 @@ export class WorkspaceChannels {
       },
       durableQueue: true,
       runtimeRevision: 'workforce-employee-ma-memory-v3',
+      // 此请求构建只读取员工、项目记忆和环境配置，不创建外部资源。
+      sessionRequestReadOnly: true,
       verifyQueuedMessages: true,
       buildSessionRequest: async (message, draft) => {
         const latest = this.get(b.employeeId)!;

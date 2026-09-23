@@ -142,7 +142,7 @@ test("准备阶段有未决外部操作时整批回滚，不部分清理队列",
     const interrupted = store.finishMessage(preparing.id, "failed");
     const queued = store.receiveMessage(message("queued"), binding)!;
     store.saveSession(key, "old", "agent");
-    assert.throws(() => store.resetConversationQueue(key, [queued, interrupted], message("reset", { text: "/new" })), /未核实/);
+    assert.throws(() => store.resetConversationQueue(key, [queued, interrupted], message("reset", { text: "/new" }), undefined, true), /未核实/);
     assert.equal(store.inbox.findTask(queued.id)?.state, "queued");
     assert.equal(store.getSession(key), "old");
   } finally { store.close(); }
@@ -236,5 +236,50 @@ for (const finished of [true, false]) test(`多分支旧任务${finished ? '有'
     assert.equal(store.inbox.findTask(received.id)?.state, finished ? 'failed' : 'uncertain');
     if (finished) assert.equal(store.sharedGroupKey(canonical).tenantId, '@shared-group');
     else assert.throws(() => store.sharedGroupKey(canonical), /多个历史会话分支/);
+  } finally { store.close(); }
+});
+
+for (const [stepId, readOnly, allowed] of [
+  ['session-request', true, true], ['session-request', false, false], ['unknown-hook', true, false],
+] as const) test(`历史准备步骤 ${stepId} 只读契约=${readOnly} 的重置边界`, () => {
+  const store = new GatewayStore(':memory:'); store.acquireRuntimeLock();
+  try {
+    const key = toConversationKey(message('pending'), true);
+    const binding = { scope: store.conversationKey(key), agentId: 'agent', configFingerprint: 'config' };
+    const first = store.receiveMessage(message('pending'), binding)!;
+    let task = store.inbox.claim(first.id, binding)!;
+    task = store.inbox.beginPreparationPlan(task, { reusable: true });
+    task = store.inbox.beginPreparationStep(task, task.preparationPlan!.id, {
+      id: stepId, kind: 'hook', inputFingerprint: 'a'.repeat(64),
+    });
+    task = store.finishMessage(task.id, 'failed');
+    const reset = () => store.resetConversationQueue(key, [task], message('reset', { text: '/new' }), undefined, readOnly);
+    if (allowed) { reset(); assert.equal(store.inbox.findTask(task.id)?.state, 'failed'); }
+    else { assert.throws(reset, /未核实/); assert.equal(store.inbox.findTask(task.id)?.state, 'uncertain'); }
+  } finally { store.close(); }
+});
+
+test('只读记忆配置校验失败后 /new 可恢复，旧消息不重跑，新消息正常执行', async () => {
+  const store = new GatewayStore(':memory:'); store.acquireRuntimeLock();
+  const replies: string[] = [], runs: string[] = []; let configured = false, creates = 0;
+  const gateway = new Gateway(store, {
+    createSession: async () => `fresh-${++creates}`,
+    run: async (session) => { runs.push(session); return { terminal: 'idle', messages: ['done'] }; },
+  }, async (_m, out) => { if (out.type === 'text') replies.push(out.text); }, {
+    ...options, sessionRequestReadOnly: true,
+    buildSessionRequest: (_m, draft) => { if (!configured) throw new Error('项目记忆未迁移'); return draft; },
+  });
+  try {
+    gateway.accept(message('invalid')); gateway.accept(message('queued'));
+    await until(() => store.inbox.findMessage(message('invalid'))?.state === 'uncertain');
+    assert.equal(creates, 0);
+    assert.equal(store.inbox.findMessage(message('invalid'))?.preparationPlan?.steps.find(s => s.id === 'session-request')?.kind, 'observation');
+    configured = true;
+    gateway.accept(message('reset', { text: '/new' }));
+    await until(() => replies.some(x => x.includes('已开启新会话')));
+    assert.equal(store.inbox.findMessage(message('queued'))?.state, 'failed');
+    gateway.accept(message('next'));
+    await until(() => store.inbox.findMessage(message('next'))?.state === 'completed');
+    assert.deepEqual(runs, ['fresh-1']);
   } finally { store.close(); }
 });

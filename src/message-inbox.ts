@@ -111,7 +111,7 @@ export class MessageInbox {
     return this.save(task, { ...task, owner: this.runtimeOwner(), state: "failed" });
   }
 
-  cancelForReset(expected: InboxTask): InboxTask {
+  cancelForReset(expected: InboxTask, sessionRequestReadOnly = false): InboxTask {
     this.runtimeOwner();
     const task = this.get(expected.id);
     if (!task || task.revision !== expected.revision || task.state !== expected.state)
@@ -120,7 +120,9 @@ export class MessageInbox {
     if (task.state === "uncertain" && task.interruptedAt === "dispatched")
       return this.discardInspection(task, "conversation_user");
     if (task.state !== "uncertain" || task.interruptedAt !== "preparing" || hasDispatchEvidence(task)
-      || task.preparationPlan?.steps.some(step => step.state === "pending" && step.kind !== "observation"))
+      || task.preparationPlan?.steps.some(step => step.state === "pending" && step.kind !== "observation"
+        // 工作台旧版本将纯读取配置也记为 hook；仅显式只读契约允许清理该历史步骤。
+        && !(sessionRequestReadOnly && step.id === "session-request" && step.kind === "hook")))
       throw new Error("原任务仍有未核实的运行或外部准备操作，暂不能重置");
     return this.save(task, { ...task, owner: this.runtimeOwner(), state: "failed" });
   }
