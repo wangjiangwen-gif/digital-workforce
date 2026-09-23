@@ -9,7 +9,7 @@ metadata:
 # 数据准备与样本验收
 
 ## 先检查依赖
-读取项目背景与 config/dependencies.json。确认项目、统计周期 [start,end)、时区、平台范围和数据来源。默认文件输入；MCP 模式必须使用环境中实际配置且可发现的工具及权限，不得猜测工具名、接口 URL 或密钥。缺数据时请求上传 CSV/JSON，不能生成假热点填空。
+读取项目背景与 config/dependencies.md。确认项目、统计周期 [start,end)、时区、平台范围和数据来源。默认文件输入；MCP 模式必须使用环境中实际配置且可发现的工具及权限，不得猜测工具名、接口 URL 或密钥。缺数据时请求上传 CSV/JSON，不能生成假热点填空。
 
 ## 输入契约
 每条记录：record_id、platform、title、source_url、published_at（带时区）。可选 observed_at、author、views、likes、comments、shares、favorites、heat_value、heat_unit。缺失数值使用 null；0 保留为真实观测。不同平台热度保留原始单位，不能直接加总。

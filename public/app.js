@@ -1021,7 +1021,7 @@ function templateDependencies(e) {
   if (!Array.isArray(e.dependencies) || !e.dependencies.length) return '';
   return panel(
     '场景依赖',
-    '下面是配置要求，尚未进行外部连通性验证。具体契约在员工记忆 config/dependencies.json 中。',
+    '下面是配置要求，尚未进行外部连通性验证。具体契约在员工记忆 config/dependencies.md 中。',
     `<div class="grid compact-cards">${e.dependencies.map((d) => `<article class="entity-card"><h3>${esc(d.name)}</h3>${badge(d.status)}<p>${esc(d.description)}</p></article>`).join('')}</div>`,
   );
 }

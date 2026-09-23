@@ -411,7 +411,9 @@ export class WorkspaceChannels {
             : 'error';
       // SDK 错误可能含请求配置和密钥，因此不向页面或日志透传原始错误。
       b.message =
-        error instanceof MissingMaConfig || error instanceof MissingPermissions
+        error instanceof MissingMaConfig ||
+        error instanceof MissingPermissions ||
+        error instanceof DomainError
           ? error.message
           : b.pendingResource
             ? `创建 ${b.pendingResource} 结果未确认，请核查 MA 后继续`

@@ -107,8 +107,24 @@ export class WorkspaceMemories {
     return this.exclusive(kind, id, () => this.migrateOwner(kind, id));
   }
   private async migrateOwner(kind: string, id: string) {
-    const owner = this.owner(kind, id);
+    let owner = this.owner(kind, id);
     if (owner.memoryMode === 'ma') return this.workspace.read();
+    // 修复旧社媒模板的 JSON 文件后缀；MA 仅接受 Markdown 或文本条目。
+    if (
+      owner.templateId === 'social-trends-weekly-v1' &&
+      owner.memories.some((m: any) => m.path === 'config/dependencies.json')
+    ) {
+      this.updateOwner(kind, id, (o) => {
+        for (const entry of o.memories.filter((m: any) => m.path === 'config/dependencies.json')) {
+          if (o.memories.some((m: any) => m.storeId === entry.storeId && m.path === 'config/dependencies.md'))
+            throw new DomainError('依赖契约的新旧路径同时存在，请核查后重试', 409);
+          entry.path = 'config/dependencies.md';
+        }
+        if (typeof o.knowledge === 'string')
+          o.knowledge = o.knowledge.replaceAll('config/dependencies.json', 'config/dependencies.md');
+      });
+      owner = this.owner(kind, id);
+    }
     // 迁移中禁止普通保存改写旧内容；只有全部条目核验成功后才移除本地正文。
     this.updateOwner(kind, id, (o) => {
       o.memoryMigration = true;

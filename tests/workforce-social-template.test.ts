@@ -40,7 +40,7 @@ test('两类模板独立幂等，不覆盖用户内容，无 Key 时不产生模
     const employee = state.state.employees.find((e: any) => e.id === social.employeeId);
     assert.equal(employee.memories.length, 6);
     const dependencies = JSON.parse(
-      employee.memories.find((m: any) => m.path === 'config/dependencies.json').content,
+      employee.memories.find((m: any) => m.path === 'config/dependencies.md').content,
     );
     assert.equal(dependencies.schedule.enabled, false);
     assert.equal(dependencies.input.mcp_tool, null);

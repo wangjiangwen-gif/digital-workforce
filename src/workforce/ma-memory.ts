@@ -117,6 +117,7 @@ export class MaMemoryApi {
         .some((p) => !p || p === '.' || p === '..')
     )
       throw new DomainError('请输入有效的记忆条目路径');
+    if (!/\.(md|txt)$/.test(path)) throw new DomainError('MA 记忆条目仅支持 .md 或 .txt 后缀');
     if (typeof content !== 'string' || Buffer.byteLength(content, 'utf8') > 100 * 1024)
       throw new DomainError('记忆文本不能超过 100 KB');
     return { path: '/' + path.replace(/^\//, ''), content };

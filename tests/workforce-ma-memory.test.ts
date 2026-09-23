@@ -519,3 +519,35 @@ test('已有整理 Agent 原位升级为七个分流工具，升级回包不确�
     f.workspace.close();
   }
 });
+
+test('旧社媒 JSON 契约迁移为 Markdown 路径且保留正文和自定义知识', async () => {
+  const f = fixture();
+  try {
+    const state = f.workspace.read();
+    const e = state.state.employees[0];
+    e.templateId = 'social-trends-weekly-v1';
+    e.knowledge = '自定义知识；读取 config/dependencies.json';
+    e.memories[0].path = 'config/dependencies.json';
+    const original = e.memories[0].content;
+    f.workspace.save(state.state, state.revision);
+    await f.memories.migrate('employees', 'e');
+    const saved = f.workspace.read().state.employees[0];
+    assert.equal(saved.memoryMode, 'ma');
+    assert.equal(saved.knowledge, '自定义知识；读取 config/dependencies.md');
+    const written = f.calls.find((c: any) => c.method === 'POST' && c.body?.path);
+    assert.equal(written.body.path, '/config/dependencies.md');
+    assert.equal(written.body.content, original);
+  } finally {
+    f.workspace.close();
+  }
+});
+
+test('不受支持的记忆后缀在发请求前被拒绝', () => {
+  let requests = 0;
+  const api = new MaMemoryApi({ apiKey: () => 'test' }, (async () => {
+    requests++;
+    return Response.json({});
+  }) as any);
+  assert.throws(() => api.createEntry('memstore-test', '/config.json', '{}'), /仅支持/);
+  assert.equal(requests, 0);
+});
