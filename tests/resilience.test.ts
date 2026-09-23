@@ -155,7 +155,7 @@ test("one unsupported file never swallows a valid sibling or the user's text", a
   await until(() => h.replies.length === 1);
   assert.equal(h.resources.length, 1);
   assert.match(h.inputs[0], /先分析能读取的文件/);
-  assert.match(h.replies[0], /MA 暂不支持此文件类型/);
+  assert.match(h.replies[0], /当前上传用途不支持此类型/);
 });
 
 test("inline text source is restored after compact within the same Session", async t => {

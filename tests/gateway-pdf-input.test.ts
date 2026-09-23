@@ -144,3 +144,18 @@ test("streaming path sends the same PDF references", async () => {
     assert.equal(typeof f.runs[0][4], "function");
   } finally { f.store.close(); }
 });
+
+for (const [name, mode, purpose] of [
+  ['data.json', 'file', 'agent'], ['report.pdf', 'file', 'user_data'], ['report.pdf', 'sandbox', 'agent'], ['photo.png', 'file', 'agent'],
+] as const) test(`上传用途 ${name} / ${mode} = ${purpose}`, async () => {
+  const uploaded: string[] = [];
+  const f = fixture({ pdfInputMode: mode });
+  (f.gateway as any).ark.uploadFile = async (name: string, _mime: string, _bytes: Uint8Array, operation: any) => {
+    uploaded.push(operation.purpose); return { id: 'file-1', name };
+  };
+  try {
+    f.gateway.accept(message('purpose', { resources: [{ ...pdf, name }] }));
+    await settle(() => f.replies.length === 1);
+    assert.deepEqual(uploaded, [purpose]);
+  } finally { f.store.close(); }
+});

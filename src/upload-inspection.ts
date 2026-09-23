@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 
-export type FileUploadQuery = { uploadName: string; bytes: number; startedAt: number };
+export type FileUploadQuery = { uploadName: string; bytes: number; startedAt: number; purpose?: "user_data" | "agent" };
 export type FileUploadProof = FileUploadQuery & { status: "confirmed"; fileId: string; checkedAt: number };
 export type FileUploadInspection = FileUploadProof | { status: "unknown"; reason: "files_unavailable" | "invalid_files" | "not_found" | "ambiguous_file" | "file_not_ready" | "scan_limit" };
 
@@ -11,14 +11,14 @@ export function newUploadName(originalName: string): string {
   return `arkagent-${randomUUID()}${originalName.match(/\.[a-zA-Z0-9]{1,16}$/)?.[0] || ""}`;
 }
 export function validUploadQuery(query: FileUploadQuery): boolean {
-  return validUploadName(query.uploadName) && Number.isSafeInteger(query.bytes) && query.bytes >= 0
+  return (query.purpose === undefined || query.purpose === "agent" || query.purpose === "user_data") && validUploadName(query.uploadName) && Number.isSafeInteger(query.bytes) && query.bytes >= 0
     && Number.isSafeInteger(query.startedAt) && query.startedAt > 0 && query.startedAt <= Date.now();
 }
 function record(value: unknown): value is Record<string, unknown> { return Boolean(value) && typeof value === "object" && !Array.isArray(value); }
 function identifier(value: unknown): value is string { return typeof value === "string" && value.length > 0 && value.length <= 256 && !/[\u0000-\u0020\u007f]/.test(value); }
 function matchesUpload(value: Record<string, unknown>, query: FileUploadQuery): boolean {
   const created = value.created_at;
-  return identifier(value.id) && value.filename === query.uploadName && value.bytes === query.bytes && value.purpose === "user_data"
+  return identifier(value.id) && value.filename === query.uploadName && value.bytes === query.bytes && value.purpose === (query.purpose || "user_data")
     && Number.isSafeInteger(created) && Number(created) >= Math.floor(query.startedAt / 1000) - 30
     && Number(created) <= Math.ceil(query.startedAt / 1000) + 120 && Number(created) <= Math.floor(Date.now() / 1000) + 30;
 }
@@ -34,7 +34,7 @@ export async function inspectUploadedFile(query: FileUploadQuery, read: (path: s
   const ids = new Set<string>();
   let after: string | undefined, candidate: Record<string, unknown> | undefined;
   for (let index = 0; index < 20; index++) {
-    const payload = await read(`/files?purpose=user_data&limit=100&order=desc${after ? `&after=${encodeURIComponent(after)}` : ""}`);
+    const payload = await read(`/files?purpose=${query.purpose || "user_data"}&limit=100&order=desc${after ? `&after=${encodeURIComponent(after)}` : ""}`);
     if (!record(payload) || payload.error || !Array.isArray(payload.data) || payload.data.length > 100 || typeof payload.has_more !== "boolean") return invalid;
     const rows: unknown[] = payload.data;
     for (const row of rows) {

@@ -109,7 +109,7 @@ test("original preparing inbox recovers an unknown upload after actual process e
     assert.equal(receipt.status, "pending");
     const uploaded = events(files.ledger).find(event => event.kind === "upload")!;
     const file = { id: "file-original-recovered", object: "file", filename: uploaded.uploadName, bytes: uploaded.bytes,
-      purpose: "user_data", status: "active", created_at: Math.floor(receipt.startedAt / 1000), expire_at: Math.floor(Date.now() / 1000) + 3600 };
+      purpose: receipt.purpose, status: "active", created_at: Math.floor(receipt.startedAt / 1000), expire_at: Math.floor(Date.now() / 1000) + 3600 };
     let gets = 0, downloads = 0, uploads = 0, mounts = 0, messagePosts = 0; const inputs: string[] = [];
     const client = new ArkClient("fixture-secret", "https://ark.test", async (url, init) => {
       const path = new URL(String(url)).pathname, method = init?.method || "GET";

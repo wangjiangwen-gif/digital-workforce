@@ -89,7 +89,7 @@ test("Gateway process exit after remote upload recovers the original File ID wit
   const store = new GatewayStore(path), receipts = store.attachmentTrace.list(message("source")).items;
   const original = receipts.find(r => r.stage === "upload")!;
   assert.equal(original.status, "pending"); assert.equal(original.uploadName, uploaded.uploadName);
-  const q = { uploadName: uploaded.uploadName, bytes: uploaded.bytes, startedAt: original.startedAt }, file = remoteFile(q);
+  const q = { uploadName: uploaded.uploadName, bytes: uploaded.bytes, startedAt: original.startedAt }, file = { ...remoteFile(q), purpose: original.purpose };
   let gets = 0, mounts = 0, runs = 0;
   const client = new ArkClient("secret", "https://ark.test", async url => { gets++; return Response.json(String(url).includes("?") ? page([file]) : file); });
   const replies: string[] = [];
@@ -169,7 +169,7 @@ test("upload confirmation preserves the source byte hash and is fresh, CAS-bound
   const db = new DatabaseSync(":memory:"), traces = new AttachmentTraceStore(db), source = message("source"), key = "a".repeat(64);
   const intent = traces.beginUpload(source, key, "原文.pdf", { bytes: 3, sha256: "b".repeat(64) });
   const checkedAfter = Date.now(), proof = { status: "confirmed" as const, uploadName: intent.uploadName!, bytes: 3, startedAt: intent.startedAt, fileId: "file", checkedAt: Date.now() };
-  for (const patch of [{ uploadName }, { bytes: 4 }, { startedAt: intent.startedAt - 1 }, { checkedAt: checkedAfter - 1 }, { checkedAt: Date.now() + 60_000 }]) {
+  for (const patch of [{ purpose: "agent" as const }, { uploadName }, { bytes: 4 }, { startedAt: intent.startedAt - 1 }, { checkedAt: checkedAfter - 1 }, { checkedAt: Date.now() + 60_000 }]) {
     assert.throws(() => traces.confirmUpload(source, key, intent.id, { ...proof, ...patch }, checkedAfter));
   }
   assert.throws(() => traces.confirmUpload({ ...source, installationId: "other" }, key, intent.id, proof, checkedAfter));
@@ -291,4 +291,21 @@ test("generic HTTP400 upload response does not become a definite rejection", asy
   }
   assert.equal(uploads, 1); assert.match(replies[1], /上传结果待核实/);
   store.close();
+});
+
+test('agent 文件上传和核查使用相同用途', async () => {
+  const q = { ...query(), purpose: 'agent' as const }, file = { ...remoteFile(q), purpose: 'agent' };
+  const client = new ArkClient('key', 'https://ark.test', async (url, init) => {
+    if (init?.method === 'POST') {
+      assert.equal((init.body as FormData).get('purpose'), 'agent');
+      return Response.json(file);
+    }
+    if (String(url).includes('?')) {
+      assert.match(String(url), /purpose=agent&/);
+      return Response.json(page([file]));
+    }
+    return Response.json(file);
+  });
+  await client.uploadFile('data.json', 'application/json', new Uint8Array([1,2,3]), { uploadName, purpose: 'agent' });
+  assert.equal((await client.inspectFileUpload(q)).status, 'confirmed');
 });

@@ -558,10 +558,11 @@ export class ArkClient {
     return id;
   }
 
-  async uploadFile(name: string, mimeType: string, bytes: Uint8Array, options: { uploadName: string } | undefined = undefined): Promise<{ id: string; name: string }> {
-    if (options && !validUploadName(options.uploadName)) throw new Error("上传操作标识无效");
+  async uploadFile(name: string, mimeType: string, bytes: Uint8Array, options: { uploadName?: string; purpose?: "user_data" | "agent" } | undefined = undefined): Promise<{ id: string; name: string }> {
+    if (options?.uploadName !== undefined && !validUploadName(options.uploadName)) throw new Error("上传操作标识无效");
     const form = new FormData();
-    form.set("purpose", "user_data");
+    if (options?.purpose !== undefined && !["user_data", "agent"].includes(options.purpose)) throw new Error("文件上传用途无效");
+    form.set("purpose", options?.purpose || "user_data");
     form.set("file", new Blob([new Uint8Array(bytes)], { type: mimeType || "application/octet-stream" }), options?.uploadName || name);
     const response = await this.request("/files", { method: "POST", body: form });
     const payload = await response.json() as Record<string, unknown>;

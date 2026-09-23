@@ -1893,7 +1893,7 @@ export class Gateway {
           throw new Error("附件上传结果待核实，未重复提交上传请求");
         }
         const checkedAfter = Date.now();
-        const proof = await this.ark.inspectFileUpload({ uploadName: previous.uploadName, bytes: previous.bytes, startedAt: previous.startedAt });
+        const proof = await this.ark.inspectFileUpload({ uploadName: previous.uploadName, bytes: previous.bytes, startedAt: previous.startedAt, purpose: previous.purpose });
         if (proof.status !== "confirmed") throw new Error("附件上传结果待核实，未重复提交上传请求");
         this.store.attachmentTrace.confirmUpload(message, key, previous.id, proof, checkedAfter);
         confirmed = { bytes: previous.bytes, sha256: previous.sha256, fileId: proof.fileId };
@@ -1937,9 +1937,11 @@ export class Gateway {
       return { ...cached, key };
     }
     if (!this.ark.uploadFile) throw new Error("当前 Gateway 未配置方舟文件上传能力");
-    const intent = this.store.attachmentTrace.beginUpload(message, key, name, { bytes, sha256: sha256! });
+    // 直接输入模型的 PDF 保留 user_data，其余文件作为 Agent 沙箱资源。
+    const purpose = this.options.pdfInputMode === "file" && /\.pdf$/i.test(name) ? "user_data" : "agent";
+    const intent = this.store.attachmentTrace.beginUpload(message, key, name, { bytes, sha256: sha256!, purpose });
     let file: { id: string; name: string };
-    try { file = await this.ark.uploadFile(name, downloaded!.mimeType, downloaded!.bytes, { uploadName: intent.uploadName! }); }
+    try { file = await this.ark.uploadFile(name, downloaded!.mimeType, downloaded!.bytes, { uploadName: intent.uploadName!, purpose }); }
     catch (error) {
       this.store.attachmentTrace.finish(intent.id, "error", { failure: failureDiagnostic(error),
         ...(error instanceof ArkHttpError && error.status === 400 && error.code === "InvalidParameter" ? { rejected: true as const } : {}) });
@@ -2127,11 +2129,11 @@ function historyFingerprint(message: ChannelHistoryMessage): string {
 function attachmentError(error: unknown): string {
   const reason = error instanceof Error ? error.message : String(error);
   if (isAttachmentSizeMessage(reason)) return reason;
-  if (reason === "MA 暂不支持此文件类型，可转为 PDF 或发送 UTF-8 TXT/Markdown"
+  if (reason === "文件上传被拒绝：当前上传用途不支持此类型，请检查 Gateway 的 purpose 配置"
     || reason === "文件大小超过本轮剩余额度，请缩小文件或分批处理") return reason;
   if (reason === "附件挂载结果待核实，未重复提交挂载请求") return reason;
   if (reason === "附件上传结果待核实，未重复提交上传请求") return reason;
-  if (/file type not supported/i.test(reason)) return "MA 暂不支持此文件类型，可转为 PDF 或发送 UTF-8 TXT/Markdown";
+  if (/file type not supported/i.test(reason)) return "文件上传被拒绝：当前上传用途不支持此类型，请检查 Gateway 的 purpose 配置";
   if (reason === "不是有效的 UTF-8 编码，请转为 UTF-8 后发送") return reason;
   if (/^单轮附件总量(?:达到|超过) 40 MB，请分批处理$/.test(reason)) return reason;
   if (/^单轮附件总量(?:达到|超过) 200 MiB，请分批处理$/.test(reason)) return reason;

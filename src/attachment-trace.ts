@@ -6,7 +6,7 @@ import { validMountQuery, type FileMountProof } from "./mount-inspection.ts";
 import { newUploadName, validUploadName, validUploadQuery, type FileUploadProof } from "./upload-inspection.ts";
 
 export type AttachmentStage = "download" | "upload" | "upload_check" | "mount" | "mount_check" | "inline" | "cache";
-export type AttachmentStageDetails = { bytes?: number; sha256?: string; fileId?: string; mountPath?: string; sessionId?: string; resourceId?: string; checkedAt?: number; rejected?: true; uploadName?: string; failure?: FailureDiagnostic };
+export type AttachmentStageDetails = { purpose?: "user_data" | "agent"; bytes?: number; sha256?: string; fileId?: string; mountPath?: string; sessionId?: string; resourceId?: string; checkedAt?: number; rejected?: true; uploadName?: string; failure?: FailureDiagnostic };
 export type AttachmentStageReceipt = AttachmentStageDetails & {
   id: string; sequence: number; attachmentKey: string; stage: AttachmentStage;
   status: "pending" | "succeeded" | "error"; startedAt: number; finishedAt?: number; durationMs?: number;
@@ -16,6 +16,10 @@ export type AttachmentDiagnostic = AttachmentStageReceipt & { tenantId: string; 
 
 function details(value: AttachmentStageDetails): AttachmentStageDetails {
   const result: AttachmentStageDetails = {};
+  if (value.purpose !== undefined) {
+    if (!["agent", "user_data"].includes(value.purpose)) throw new Error("文件上传用途无效");
+    result.purpose = value.purpose;
+  }
   if (value.failure !== undefined) result.failure = sanitizeFailure(value.failure);
   if (value.bytes !== undefined) {
     if (!Number.isSafeInteger(value.bytes) || value.bytes < 0) throw new Error("附件大小无效");
@@ -155,7 +159,7 @@ export class AttachmentTraceStore {
     return row ? receipt(row) : undefined;
   }
 
-  beginUpload(message: ChannelMessage, key: string, originalName: string, value: { bytes: number; sha256: string }): AttachmentStageReceipt {
+  beginUpload(message: ChannelMessage, key: string, originalName: string, value: { bytes: number; sha256: string; purpose?: "user_data" | "agent" }): AttachmentStageReceipt {
     this.db.exec("SAVEPOINT attachment_upload_start");
     try {
       const previous = this.latestUpload(message, key);
@@ -177,10 +181,11 @@ export class AttachmentTraceStore {
     try {
       const previous = this.latestUpload(message, key);
       if (!previous || previous.id !== expectedId || previous.uploadName !== proof.uploadName || previous.bytes !== proof.bytes
+        || (previous.purpose || "user_data") !== (proof.purpose || "user_data")
         || previous.startedAt !== proof.startedAt || !previous.sha256 || previous.rejected
         || (previous.status === "succeeded" && previous.fileId !== proof.fileId)) throw new Error("附件上传记录已变化");
       const id = this.begin(message, key, "upload_check", { bytes: previous.bytes, sha256: previous.sha256,
-        uploadName: proof.uploadName, fileId: proof.fileId, checkedAt: proof.checkedAt });
+        purpose: previous.purpose, uploadName: proof.uploadName, fileId: proof.fileId, checkedAt: proof.checkedAt });
       this.finish(id, "succeeded");
       this.db.exec("RELEASE attachment_upload_confirmation");
     } catch (error) {
